@@ -13,24 +13,11 @@
 // You should have received a copy of the GNU Lesser General Public License
 // along with the machine-emulator. If not, see http://www.gnu.org/licenses/.
 
-mod dapp_client;
-mod grpc_service;
-mod model;
-mod repository;
-mod rollups_manager;
+use std::error::Error;
 
-use futures;
-use std::{error::Error, sync::Arc};
-use tokio::sync::Mutex;
+use super::model::AdvanceRequest;
 
-use repository::Repository;
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
-    let repository = Arc::new(Mutex::new(Repository::new()));
-    let (advance_tx, mut rollups_worker, _rollups_manager) = rollups_manager::setup(repository);
-
-    futures::try_join!(grpc_service::run(advance_tx), rollups_worker.run(),)?;
-
-    Ok(())
+/// Send a advance state request to the DApp
+pub async fn advance(_request: AdvanceRequest) -> Result<(), Box<dyn Error>> {
+    unimplemented!()
 }

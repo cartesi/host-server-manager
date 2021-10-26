@@ -13,7 +13,10 @@
 // You should have received a copy of the GNU Lesser General Public License
 // along with the machine-emulator. If not, see http://www.gnu.org/licenses/.
 
+use tokio::sync::mpsc;
 use tonic::{transport::Server, Request, Response, Status};
+
+use super::model::AdvanceRequest;
 
 use cartesi_machine::Void;
 use rollup_machine_manager::rollup_machine_manager_server::{
@@ -39,7 +42,15 @@ pub mod versioning {
 }
 
 #[derive(Debug)]
-struct RollupMachineManagerService();
+struct RollupMachineManagerService {
+    advance_state_tx: mpsc::Sender<AdvanceRequest>,
+}
+
+impl RollupMachineManagerService {
+    fn new(advance_state_tx: mpsc::Sender<AdvanceRequest>) -> Self {
+        Self { advance_state_tx }
+    }
+}
 
 #[tonic::async_trait]
 impl RollupMachineManager for RollupMachineManagerService {
@@ -110,9 +121,11 @@ impl RollupMachineManager for RollupMachineManagerService {
     }
 }
 
-pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run(
+    advance_state_tx: mpsc::Sender<AdvanceRequest>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let addr = "[::]:50051".parse()?;
-    let service = RollupMachineManagerService {};
+    let service = RollupMachineManagerService::new(advance_state_tx);
 
     Server::builder()
         .add_service(RollupMachineManagerServer::new(service))

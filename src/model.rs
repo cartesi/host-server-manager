@@ -13,24 +13,28 @@
 // You should have received a copy of the GNU Lesser General Public License
 // along with the machine-emulator. If not, see http://www.gnu.org/licenses/.
 
-mod dapp_client;
-mod grpc_service;
-mod model;
-mod repository;
-mod rollups_manager;
+#[derive(Debug, Clone)]
+pub struct AdvanceMetadata {
+    pub address: String,
+    pub epoch_number: u64,
+    pub input_number: u64,
+    pub block_number: u64,
+    pub timestamp: u64,
+}
 
-use futures;
-use std::{error::Error, sync::Arc};
-use tokio::sync::Mutex;
+#[derive(Debug)]
+pub struct AdvanceRequest {
+    pub metadata: AdvanceMetadata,
+    pub payload: String,
+}
 
-use repository::Repository;
+#[derive(Debug)]
+pub struct Voucher {
+    pub address: String,
+    pub payload: String,
+}
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
-    let repository = Arc::new(Mutex::new(Repository::new()));
-    let (advance_tx, mut rollups_worker, _rollups_manager) = rollups_manager::setup(repository);
-
-    futures::try_join!(grpc_service::run(advance_tx), rollups_worker.run(),)?;
-
-    Ok(())
+#[derive(Debug)]
+pub struct Notice {
+    pub payload: String,
 }
