@@ -26,7 +26,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let repository = Arc::new(Mutex::new(Repository::new()));
     let (advancer, _inspector, _dapp_interface, mut worker) = proxy::setup(repository);
 
-    futures::try_join!(grpc_service::run(advancer), worker.run())?;
+    tokio::try_join!(grpc_service::run(advancer), worker.run())?;
 
     Ok(())
 }
