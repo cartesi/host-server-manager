@@ -15,9 +15,14 @@
 
 use std::error::Error;
 
-use super::model::AdvanceRequest;
+use super::model::{AdvanceRequest, InspectRequest, Report};
 
-/// Send a advance state request to the DApp
+/// Send a advance state request to the DApp.
 pub async fn advance(_request: AdvanceRequest) -> Result<(), Box<dyn Error>> {
+    unimplemented!()
+}
+
+/// Send a inspect request to the DApp and return the reports.
+pub async fn inspect(_request: InspectRequest) -> Result<Vec<Report>, Box<dyn Error>> {
     unimplemented!()
 }

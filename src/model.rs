@@ -29,6 +29,11 @@ pub struct AdvanceRequest {
 }
 
 #[derive(Debug)]
+pub struct InspectRequest {
+    pub payload: String,
+}
+
+#[derive(Debug)]
 pub struct Voucher {
     pub address: String,
     pub payload: String,
@@ -36,5 +41,10 @@ pub struct Voucher {
 
 #[derive(Debug)]
 pub struct Notice {
+    pub payload: String,
+}
+
+#[derive(Debug)]
+pub struct Report {
     pub payload: String,
 }

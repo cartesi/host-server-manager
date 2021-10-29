@@ -16,21 +16,20 @@
 mod dapp_client;
 mod grpc_service;
 mod model;
+mod proxy;
 mod repository;
-mod rollups_manager;
 
-use futures;
 use std::{error::Error, sync::Arc};
-use tokio::sync::Mutex;
+use tokio::{self, sync::Mutex};
 
 use repository::Repository;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let repository = Arc::new(Mutex::new(Repository::new()));
-    let (advance_tx, mut rollups_worker, _rollups_manager) = rollups_manager::setup(repository);
+    let (advancer, _inspector, _dapp_interface, mut worker) = proxy::setup(repository);
 
-    futures::try_join!(grpc_service::run(advance_tx), rollups_worker.run(),)?;
+    futures::try_join!(grpc_service::run(advancer), worker.run())?;
 
     Ok(())
 }
