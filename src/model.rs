@@ -10,7 +10,7 @@
 // CONDITIONS OF ANY KIND, either express or implied. See the License for the
 // specific language governing permissions and limitations under the License.
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdvanceMetadata {
     pub address: String,
     pub epoch_number: u64,
@@ -19,29 +19,29 @@ pub struct AdvanceMetadata {
     pub timestamp: u64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdvanceRequest {
     pub metadata: AdvanceMetadata,
     pub payload: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct InspectRequest {
     pub payload: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Voucher {
     pub address: String,
     pub payload: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Notice {
     pub payload: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Report {
     pub payload: String,
 }

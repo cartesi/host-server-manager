@@ -16,17 +16,10 @@ mod model;
 mod proxy;
 mod repository;
 
-use std::{error::Error, sync::Arc};
-use tokio::{self, sync::Mutex};
-
-use repository::Repository;
+use std::error::Error;
+use tokio;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let repository = Arc::new(Mutex::new(Repository::new()));
-    let (advancer, _inspector, _dapp_interface, mut worker) = proxy::setup(repository);
-
-    tokio::try_join!(grpc_service::run(advancer), worker.run())?;
-
     Ok(())
 }
