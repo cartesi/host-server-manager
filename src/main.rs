@@ -10,6 +10,9 @@
 // CONDITIONS OF ANY KIND, either express or implied. See the License for the
 // specific language governing permissions and limitations under the License.
 
+// TODO remove the followin line
+#![allow(dead_code)]
+
 mod dapp_client;
 mod grpc_service;
 mod model;
