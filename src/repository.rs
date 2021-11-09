@@ -10,16 +10,87 @@
 // CONDITIONS OF ANY KIND, either express or implied. See the License for the
 // specific language governing permissions and limitations under the License.
 
-/// Value with a identifier
-pub struct Identified<T> {
-    pub id: u64,
-    pub value: T,
+use async_trait::async_trait;
+use std::error::Error;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+use super::model::{AdvanceMetadata as Metadata, Notice, Report, Voucher};
+use super::proxy::{Identified, Repository};
+
+/// Store the data in the RAM
+pub struct MemRepository {
+    data: Arc<Mutex<SharedData>>,
 }
 
-pub struct Repository {}
-
-impl Repository {
+impl MemRepository {
     pub fn new() -> Self {
-        Self {}
+        Self {
+            data: Arc::new(Mutex::new(SharedData::new())),
+        }
+    }
+}
+
+#[async_trait]
+impl Repository for MemRepository {
+    async fn store_vouchers(
+        &self,
+        metadata: &Metadata,
+        vouchers: Vec<Identified<Voucher>>,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let mut data = self.data.lock().await;
+        for voucher in vouchers {
+            data.vouchers.push(Entry::new(metadata.clone(), voucher));
+        }
+        Ok(())
+    }
+
+    async fn store_notices(
+        &self,
+        metadata: &Metadata,
+        notices: Vec<Identified<Notice>>,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let mut data = self.data.lock().await;
+        for notice in notices {
+            data.notices.push(Entry::new(metadata.clone(), notice));
+        }
+        Ok(())
+    }
+
+    async fn store_report(
+        &self,
+        metadata: &Metadata,
+        report: Report,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let mut data = self.data.lock().await;
+        data.reports.push(Entry::new(metadata.clone(), report));
+        Ok(())
+    }
+}
+
+struct SharedData {
+    vouchers: Vec<Entry<Identified<Voucher>>>,
+    notices: Vec<Entry<Identified<Notice>>>,
+    reports: Vec<Entry<Report>>,
+}
+
+impl SharedData {
+    fn new() -> Self {
+        Self {
+            vouchers: vec![],
+            notices: vec![],
+            reports: vec![],
+        }
+    }
+}
+
+struct Entry<T> {
+    metadata: Metadata,
+    value: T,
+}
+
+impl<T> Entry<T> {
+    fn new(metadata: Metadata, value: T) -> Self {
+        Self { metadata, value }
     }
 }

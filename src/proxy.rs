@@ -25,8 +25,8 @@ use crate::model::{AdvanceMetadata, AdvanceRequest, InspectRequest, Notice, Repo
 /// Create the proxy service and the proxy channel.
 /// The service should be ran in the background and the channel can be used to communicate with it.
 pub fn new(
-    repository_channel: Box<dyn RepositoryChannel + Send>,
-    dapp_channel: Box<dyn DAppChannel + Send>,
+    repository: Box<dyn Repository + Send>,
+    dapp: Box<dyn DApp + Send>,
 ) -> (ProxyChannel, ProxyService) {
     let (advance_tx, advance_rx) = mpsc::channel::<AdvanceRequest>(1000);
     let (inspect_tx, inspect_rx) = mpsc::channel::<SyncInspectRequest>(1000);
@@ -49,7 +49,7 @@ pub fn new(
     };
 
     let service = ProxyService {
-        state: IdleState::new(repository_channel, dapp_channel, 0),
+        state: IdleState::new(repository, dapp, 0),
         advance_rx,
         inspect_rx,
         voucher_rx,
@@ -66,16 +66,13 @@ pub fn new(
 /// Channel used to communicate with the DApp
 #[cfg_attr(test, automock)]
 #[async_trait]
-pub trait DAppChannel {
+pub trait DApp {
     /// Send an advance request to the client
-    async fn advance(
-        &mut self,
-        request: AdvanceRequest,
-    ) -> Result<(), Box<dyn Error + Send + Sync>>;
+    async fn advance(&self, request: AdvanceRequest) -> Result<(), Box<dyn Error + Send + Sync>>;
 
     /// Send an inspect request to the client
     async fn inspect(
-        &mut self,
+        &self,
         request: InspectRequest,
     ) -> Result<Vec<Report>, Box<dyn Error + Send + Sync>>;
 }
@@ -89,24 +86,24 @@ pub struct Identified<T> {
 /// Channel used to communicate with the repository
 #[cfg_attr(test, automock)]
 #[async_trait]
-pub trait RepositoryChannel {
+pub trait Repository {
     /// Send request to store the vouchers
     async fn store_vouchers(
-        &mut self,
+        &self,
         metadata: &AdvanceMetadata,
         vouchers: Vec<Identified<Voucher>>,
     ) -> Result<(), Box<dyn Error + Send + Sync>>;
 
     /// Send request to store the notices
     async fn store_notices(
-        &mut self,
+        &self,
         metadata: &AdvanceMetadata,
         notices: Vec<Identified<Notice>>,
     ) -> Result<(), Box<dyn Error + Send + Sync>>;
 
     /// Send request to store a report
     async fn store_report(
-        &mut self,
+        &self,
         metadata: &AdvanceMetadata,
         report: Report,
     ) -> Result<(), Box<dyn Error + Send + Sync>>;
@@ -128,7 +125,7 @@ pub struct ProxyChannel {
 impl ProxyChannel {
     /// Send an advance request
     pub async fn advance(
-        &mut self,
+        &self,
         request: AdvanceRequest,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         Ok(self.advance_tx.send(request).await?)
@@ -136,48 +133,39 @@ impl ProxyChannel {
 
     /// Send an inspect request and wait for the report
     pub async fn inspect(
-        &mut self,
+        &self,
         request: InspectRequest,
     ) -> Result<Vec<Report>, Box<dyn Error + Send + Sync>> {
-        Self::make_sync_request(request, &mut self.inspect_tx).await
+        Self::make_sync_request(request, &self.inspect_tx).await
     }
 
     /// Send a voucher request
-    pub async fn add_voucher(
-        &mut self,
-        voucher: Voucher,
-    ) -> Result<u64, Box<dyn Error + Send + Sync>> {
-        Self::make_sync_request(voucher, &mut self.voucher_tx).await
+    pub async fn add_voucher(&self, voucher: Voucher) -> Result<u64, Box<dyn Error + Send + Sync>> {
+        Self::make_sync_request(voucher, &self.voucher_tx).await
     }
 
     /// Send a notice request
-    pub async fn add_notice(
-        &mut self,
-        notice: Notice,
-    ) -> Result<u64, Box<dyn Error + Send + Sync>> {
-        Self::make_sync_request(notice, &mut self.notice_tx).await
+    pub async fn add_notice(&self, notice: Notice) -> Result<u64, Box<dyn Error + Send + Sync>> {
+        Self::make_sync_request(notice, &self.notice_tx).await
     }
 
     /// Send a report request
-    pub async fn add_report(
-        &mut self,
-        request: Report,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    pub async fn add_report(&self, request: Report) -> Result<(), Box<dyn Error + Send + Sync>> {
         Ok(self.report_tx.send(request).await?)
     }
 
     /// Send a accept request
-    pub async fn accept(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
+    pub async fn accept(&self) -> Result<(), Box<dyn Error + Send + Sync>> {
         Ok(self.accept_tx.send(()).await?)
     }
 
     /// Send a reject request
-    pub async fn reject(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
+    pub async fn reject(&self) -> Result<(), Box<dyn Error + Send + Sync>> {
         Ok(self.reject_tx.send(()).await?)
     }
 
     /// Send a shutdown request
-    pub async fn shutdown(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
+    pub async fn shutdown(&self) -> Result<(), Box<dyn Error + Send + Sync>> {
         Ok(self.shutdown_tx.send(()).await?)
     }
 
@@ -186,7 +174,7 @@ impl ProxyChannel {
         U: std::fmt::Debug + Send + Sync + 'static,
     >(
         value: T,
-        tx: &mut mpsc::Sender<SyncRequest<T, U>>,
+        tx: &mpsc::Sender<SyncRequest<T, U>>,
     ) -> Result<U, Box<dyn Error + Send + Sync>> {
         let (response_tx, response_rx) = oneshot::channel();
         tx.send(SyncRequest { value, response_tx }).await?;
@@ -272,43 +260,36 @@ enum State {
 }
 
 struct IdleState {
-    repository_channel: Box<dyn RepositoryChannel + Send>,
-    dapp_channel: Box<dyn DAppChannel + Send>,
+    repository: Box<dyn Repository + Send>,
+    dapp: Box<dyn DApp + Send>,
     id: u64,
 }
 
 impl IdleState {
-    fn new(
-        repository_channel: Box<dyn RepositoryChannel + Send>,
-        dapp_channel: Box<dyn DAppChannel + Send>,
-        id: u64,
-    ) -> State {
+    fn new(repository: Box<dyn Repository + Send>, dapp: Box<dyn DApp + Send>, id: u64) -> State {
         State::Idle(Self {
-            repository_channel,
-            dapp_channel,
+            repository,
+            dapp,
             id,
         })
     }
 
-    async fn advance(
-        mut self,
-        request: AdvanceRequest,
-    ) -> Result<State, Box<dyn Error + Send + Sync>> {
+    async fn advance(self, request: AdvanceRequest) -> Result<State, Box<dyn Error + Send + Sync>> {
         let metadata = request.metadata.clone();
-        self.dapp_channel.advance(request).await?;
+        self.dapp.advance(request).await?;
         Ok(AdvancingState::new(
-            self.repository_channel,
-            self.dapp_channel,
+            self.repository,
+            self.dapp,
             metadata,
             self.id,
         ))
     }
 
     async fn inspect(
-        mut self,
+        self,
         request: SyncInspectRequest,
     ) -> Result<State, Box<dyn Error + Send + Sync>> {
-        let response = self.dapp_channel.inspect(request.value).await?;
+        let response = self.dapp.inspect(request.value).await?;
         request
             .response_tx
             .send(response)
@@ -318,8 +299,8 @@ impl IdleState {
 }
 
 struct AdvancingState {
-    repository_channel: Box<dyn RepositoryChannel + Send>,
-    dapp_channel: Box<dyn DAppChannel + Send>,
+    repository: Box<dyn Repository + Send>,
+    dapp: Box<dyn DApp + Send>,
     metadata: AdvanceMetadata,
     previous_id: u64,
     current_id: u64,
@@ -329,14 +310,14 @@ struct AdvancingState {
 
 impl AdvancingState {
     fn new(
-        repository_channel: Box<dyn RepositoryChannel + Send>,
-        dapp_channel: Box<dyn DAppChannel + Send>,
+        repository: Box<dyn Repository + Send>,
+        dapp: Box<dyn DApp + Send>,
         metadata: AdvanceMetadata,
         id: u64,
     ) -> State {
         State::Advancing(Self {
-            repository_channel,
-            dapp_channel,
+            repository,
+            dapp,
             metadata,
             previous_id: id,
             current_id: id,
@@ -361,37 +342,27 @@ impl AdvancingState {
         Ok(State::Advancing(self))
     }
 
-    async fn add_report(mut self, report: Report) -> Result<State, Box<dyn Error + Send + Sync>> {
-        self.repository_channel
-            .store_report(&mut self.metadata, report)
-            .await?;
+    async fn add_report(self, report: Report) -> Result<State, Box<dyn Error + Send + Sync>> {
+        self.repository.store_report(&self.metadata, report).await?;
         Ok(State::Advancing(self))
     }
 
-    async fn accept(mut self) -> Result<State, Box<dyn Error + Send + Sync>> {
+    async fn accept(self) -> Result<State, Box<dyn Error + Send + Sync>> {
         if !self.vouchers.is_empty() {
-            self.repository_channel
-                .store_vouchers(&mut self.metadata, self.vouchers)
+            self.repository
+                .store_vouchers(&self.metadata, self.vouchers)
                 .await?;
         }
         if !self.notices.is_empty() {
-            self.repository_channel
-                .store_notices(&mut self.metadata, self.notices)
+            self.repository
+                .store_notices(&self.metadata, self.notices)
                 .await?;
         }
-        Ok(IdleState::new(
-            self.repository_channel,
-            self.dapp_channel,
-            self.current_id,
-        ))
+        Ok(IdleState::new(self.repository, self.dapp, self.current_id))
     }
 
     async fn reject(self) -> Result<State, Box<dyn Error + Send + Sync>> {
-        Ok(IdleState::new(
-            self.repository_channel,
-            self.dapp_channel,
-            self.previous_id,
-        ))
+        Ok(IdleState::new(self.repository, self.dapp, self.previous_id))
     }
 
     fn add_identified<T: Send + Sync>(
@@ -421,8 +392,8 @@ mod tests {
     async fn test_it_sends_an_advance_request() {
         let notify = Arc::new(Notify::new());
         let request = fake_advance_request();
-        let repository = Box::new(MockRepositoryChannel::new());
-        let mut dapp = Box::new(MockDAppChannel::new());
+        let repository = Box::new(MockRepository::new());
+        let mut dapp = Box::new(MockDApp::new());
         {
             let notify = notify.clone();
             dapp.expect_advance()
@@ -455,8 +426,8 @@ mod tests {
                 payload: String::from("result2"),
             },
         ];
-        let repository = Box::new(MockRepositoryChannel::new());
-        let mut dapp = Box::new(MockDAppChannel::new());
+        let repository = Box::new(MockRepository::new());
+        let mut dapp = Box::new(MockDApp::new());
         {
             let response = expected.clone();
             dapp.expect_inspect()
@@ -478,8 +449,8 @@ mod tests {
         let n = 3;
         let request = fake_advance_request();
         let semaphore = Arc::new(Semaphore::new(0));
-        let repository = Box::new(MockRepositoryChannel::new());
-        let mut dapp = Box::new(MockDAppChannel::new());
+        let repository = Box::new(MockRepository::new());
+        let mut dapp = Box::new(MockDApp::new());
         {
             let semaphore = semaphore.clone();
             dapp.expect_advance()
@@ -510,8 +481,8 @@ mod tests {
             payload: String::from("0xdeadbeef"),
         };
         let advance_notify = &[Arc::new(Notify::new()), Arc::new(Notify::new())];
-        let repository = Box::new(MockRepositoryChannel::new());
-        let mut dapp = Box::new(MockDAppChannel::new());
+        let repository = Box::new(MockRepository::new());
+        let mut dapp = Box::new(MockDApp::new());
         {
             let advance_notify_0 = advance_notify[0].clone();
             let advance_notify_1 = advance_notify[1].clone();
@@ -574,13 +545,13 @@ mod tests {
                 },
             },
         ];
-        let mut repository = Box::new(MockRepositoryChannel::new());
+        let mut repository = Box::new(MockRepository::new());
         repository
             .expect_store_vouchers()
             .times(1)
             .with(eq(request.metadata.clone()), eq(vouchers.clone()))
             .return_once(|_, _| Ok(()));
-        let mut dapp = Box::new(MockDAppChannel::new());
+        let mut dapp = Box::new(MockDApp::new());
         {
             let notify = notify.clone();
             dapp.expect_advance().times(1).return_once(move |_| {
@@ -619,13 +590,13 @@ mod tests {
                 },
             },
         ];
-        let mut repository = Box::new(MockRepositoryChannel::new());
+        let mut repository = Box::new(MockRepository::new());
         repository
             .expect_store_notices()
             .times(1)
             .with(eq(request.metadata.clone()), eq(notices.clone()))
             .return_once(|_, _| Ok(()));
-        let mut dapp = Box::new(MockDAppChannel::new());
+        let mut dapp = Box::new(MockDApp::new());
         {
             let notify = notify.clone();
             dapp.expect_advance().times(1).return_once(move |_| {
@@ -653,13 +624,13 @@ mod tests {
         let report = Report {
             payload: String::from("0xdeadbeef"),
         };
-        let mut repository = Box::new(MockRepositoryChannel::new());
+        let mut repository = Box::new(MockRepository::new());
         repository
             .expect_store_report()
             .times(1)
             .with(eq(request.metadata.clone()), eq(report.clone()))
             .return_once(|_, _| Ok(()));
-        let mut dapp = Box::new(MockDAppChannel::new());
+        let mut dapp = Box::new(MockDApp::new());
         {
             let notify = notify.clone();
             dapp.expect_advance().times(1).return_once(move |_| {
@@ -689,8 +660,8 @@ mod tests {
             payload: String::from("notice 0"),
         };
         let notify = Arc::new(Notify::new());
-        let repository = Box::new(MockRepositoryChannel::new());
-        let mut dapp = Box::new(MockDAppChannel::new());
+        let repository = Box::new(MockRepository::new());
+        let mut dapp = Box::new(MockDApp::new());
         {
             let notify = notify.clone();
             dapp.expect_advance().times(1).return_once(move |_| {

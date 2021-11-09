@@ -14,7 +14,9 @@
 #![allow(dead_code)]
 
 mod dapp_client;
+mod grpc_proto;
 mod grpc_service;
+mod http_service;
 mod model;
 mod proxy;
 mod repository;
@@ -22,7 +24,20 @@ mod repository;
 use std::error::Error;
 use tokio;
 
+use dapp_client::DAppClient;
+use repository::MemRepository;
+
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
+    let dapp_client = Box::new(DAppClient::new());
+    let repository = Box::new(MemRepository::new());
+    let (proxy_channel, proxy_service) = proxy::new(repository, dapp_client);
+
+    tokio::try_join!(
+        proxy_service.run(),
+        http_service::run(proxy_channel.clone()),
+        grpc_service::run(proxy_channel),
+    )?;
+
     Ok(())
 }

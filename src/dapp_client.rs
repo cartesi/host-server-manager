@@ -10,16 +10,34 @@
 // CONDITIONS OF ANY KIND, either express or implied. See the License for the
 // specific language governing permissions and limitations under the License.
 
+use async_trait::async_trait;
 use std::error::Error;
 
 use super::model::{AdvanceRequest, InspectRequest, Report};
+use super::proxy::DApp;
 
-/// Send a advance state request to the DApp.
-pub async fn advance(_request: AdvanceRequest) -> Result<(), Box<dyn Error>> {
-    unimplemented!()
+pub struct DAppClient {}
+
+impl DAppClient {
+    pub fn new() -> Self {
+        Self {}
+    }
 }
 
-/// Send a inspect request to the DApp and return the reports.
-pub async fn inspect(_request: InspectRequest) -> Result<Vec<Report>, Box<dyn Error>> {
-    unimplemented!()
+#[async_trait]
+impl DApp for DAppClient {
+    async fn advance(&self, _request: AdvanceRequest) -> Result<(), Box<dyn Error + Send + Sync>> {
+        // unimplemented!()
+        Ok(())
+    }
+
+    async fn inspect(
+        &self,
+        _request: InspectRequest,
+    ) -> Result<Vec<Report>, Box<dyn Error + Send + Sync>> {
+        // unimplemented!()
+        Ok(vec![Report {
+            payload: String::from("<placeholder report>"),
+        }])
+    }
 }

@@ -10,42 +10,38 @@
 // CONDITIONS OF ANY KIND, either express or implied. See the License for the
 // specific language governing permissions and limitations under the License.
 
-use tokio::sync::mpsc;
 use tonic::{transport::Server, Request, Response, Status};
 
-use super::model::AdvanceRequest;
+use super::proxy::ProxyChannel;
 
-use cartesi_machine::Void;
-use rollup_machine_manager::rollup_machine_manager_server::{
+use crate::grpc_proto::cartesi_machine::Void;
+use crate::grpc_proto::rollup_machine_manager::rollup_machine_manager_server::{
     RollupMachineManager, RollupMachineManagerServer,
 };
-use rollup_machine_manager::{
+use crate::grpc_proto::rollup_machine_manager::{
     EndSessionRequest, EnqueueInputRequest, FinishEpochRequest, GetEpochStatusRequest,
     GetEpochStatusResponse, GetSessionStatusRequest, GetSessionStatusResponse, GetStatusResponse,
     StartSessionRequest,
 };
-use versioning::{GetVersionResponse, SemanticVersion};
+use crate::grpc_proto::versioning::{GetVersionResponse, SemanticVersion};
 
-pub mod rollup_machine_manager {
-    tonic::include_proto!("cartesi_rollup_machine_manager");
+pub async fn run(proxy: ProxyChannel) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let addr = "[::]:50051".parse()?;
+    let service = RollupMachineManagerService::new(proxy);
+    Server::builder()
+        .add_service(RollupMachineManagerServer::new(service))
+        .serve(addr)
+        .await?;
+    Ok(())
 }
 
-pub mod cartesi_machine {
-    tonic::include_proto!("cartesi_machine");
-}
-
-pub mod versioning {
-    tonic::include_proto!("versioning");
-}
-
-#[derive(Debug)]
 struct RollupMachineManagerService {
-    advance_state_tx: mpsc::Sender<AdvanceRequest>,
+    proxy: ProxyChannel,
 }
 
 impl RollupMachineManagerService {
-    fn new(advance_state_tx: mpsc::Sender<AdvanceRequest>) -> Self {
-        Self { advance_state_tx }
+    fn new(proxy: ProxyChannel) -> Self {
+        Self { proxy }
     }
 }
 
@@ -116,18 +112,4 @@ impl RollupMachineManager for RollupMachineManagerService {
     ) -> Result<Response<Void>, Status> {
         unimplemented!()
     }
-}
-
-pub async fn run(
-    advance_state_tx: mpsc::Sender<AdvanceRequest>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let addr = "[::]:50051".parse()?;
-    let service = RollupMachineManagerService::new(advance_state_tx);
-
-    Server::builder()
-        .add_service(RollupMachineManagerServer::new(service))
-        .serve(addr)
-        .await?;
-
-    Ok(())
 }
