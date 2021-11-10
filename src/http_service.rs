@@ -14,12 +14,16 @@ use rocket::{http::Status, serde::json::Json, Responder, State};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 
+use super::config::Config;
 use super::model::{Notice, Report, Voucher};
 use super::proxy::ProxyChannel;
 
 /// Creates the server and start it
-pub async fn run(proxy: ProxyChannel) -> Result<(), Box<dyn Error + Send + Sync>> {
-    rocket::build()
+pub async fn run(config: &Config, proxy: ProxyChannel) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let figment = rocket::Config::figment()
+        .merge(("address", config.proxy_http_address))
+        .merge(("port", config.proxy_http_port));
+    rocket::custom(figment)
         .manage(proxy)
         .mount("/", rocket::routes![voucher, notice, report, finish])
         .launch()

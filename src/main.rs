@@ -13,6 +13,7 @@
 // TODO remove the followin line
 #![allow(dead_code)]
 
+mod config;
 mod dapp_client;
 mod grpc_proto;
 mod grpc_service;
@@ -24,20 +25,19 @@ mod repository;
 use std::error::Error;
 use tokio;
 
+use config::Config;
 use dapp_client::DAppClient;
 use repository::MemRepository;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
+    let config = Config::new();
     let dapp_client = Box::new(DAppClient::new());
     let repository = Box::new(MemRepository::new());
     let (proxy_channel, proxy_service) = proxy::new(repository, dapp_client);
-
-    tokio::try_join!(
-        proxy_service.run(),
-        http_service::run(proxy_channel.clone()),
-        grpc_service::run(proxy_channel),
-    )?;
-
+    let proxy_service = proxy_service.run();
+    let http_service = http_service::run(&config, proxy_channel.clone());
+    let grpc_service = grpc_service::run(proxy_channel);
+    tokio::try_join!(proxy_service, http_service, grpc_service)?;
     Ok(())
 }
