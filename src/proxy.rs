@@ -14,19 +14,16 @@
 use mockall::{automock, predicate::*, Sequence};
 
 use async_trait::async_trait;
-use std::error::Error;
-use tokio::{
-    self,
-    sync::{mpsc, oneshot},
-};
+use std::{error::Error, fmt};
+use tokio::sync::{mpsc, oneshot};
 
 use crate::model::{AdvanceMetadata, AdvanceRequest, InspectRequest, Notice, Report, Voucher};
 
 /// Create the proxy service and the proxy channel.
 /// The service should be ran in the background and the channel can be used to communicate with it.
 pub fn new(
-    repository: Box<dyn Repository + Send>,
-    dapp: Box<dyn DApp + Send>,
+    repository: Box<dyn Repository + Send + Sync>,
+    dapp: Box<dyn DApp + Send + Sync>,
 ) -> (ProxyChannel, ProxyService) {
     let (advance_tx, advance_rx) = mpsc::channel::<AdvanceRequest>(1000);
     let (inspect_tx, inspect_rx) = mpsc::channel::<SyncInspectRequest>(1000);
@@ -124,49 +121,52 @@ pub struct ProxyChannel {
 
 impl ProxyChannel {
     /// Send an advance request
-    pub async fn advance(
-        &self,
-        request: AdvanceRequest,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        Ok(self.advance_tx.send(request).await?)
+    pub async fn advance(&self, request: AdvanceRequest) {
+        self.advance_tx
+            .send(request)
+            .await
+            .expect("send should not fail")
     }
 
     /// Send an inspect request and wait for the report
-    pub async fn inspect(
-        &self,
-        request: InspectRequest,
-    ) -> Result<Vec<Report>, Box<dyn Error + Send + Sync>> {
+    pub async fn inspect(&self, request: InspectRequest) -> Vec<Report> {
         Self::make_sync_request(request, &self.inspect_tx).await
     }
 
     /// Send a voucher request
-    pub async fn add_voucher(&self, voucher: Voucher) -> Result<u64, Box<dyn Error + Send + Sync>> {
+    pub async fn add_voucher(&self, voucher: Voucher) -> Result<u64, ProxyError> {
         Self::make_sync_request(voucher, &self.voucher_tx).await
     }
 
     /// Send a notice request
-    pub async fn add_notice(&self, notice: Notice) -> Result<u64, Box<dyn Error + Send + Sync>> {
+    pub async fn add_notice(&self, notice: Notice) -> Result<u64, ProxyError> {
         Self::make_sync_request(notice, &self.notice_tx).await
     }
 
     /// Send a report request
-    pub async fn add_report(&self, request: Report) -> Result<(), Box<dyn Error + Send + Sync>> {
-        Ok(self.report_tx.send(request).await?)
+    pub async fn add_report(&self, request: Report) {
+        self.report_tx
+            .send(request)
+            .await
+            .expect("send should not fail")
     }
 
     /// Send a accept request
-    pub async fn accept(&self) -> Result<(), Box<dyn Error + Send + Sync>> {
-        Ok(self.accept_tx.send(()).await?)
+    pub async fn accept(&self) {
+        self.accept_tx.send(()).await.expect("send should not fail")
     }
 
     /// Send a reject request
-    pub async fn reject(&self) -> Result<(), Box<dyn Error + Send + Sync>> {
-        Ok(self.reject_tx.send(()).await?)
+    pub async fn reject(&self) {
+        self.reject_tx.send(()).await.expect("send should not fail")
     }
 
     /// Send a shutdown request
-    pub async fn shutdown(&self) -> Result<(), Box<dyn Error + Send + Sync>> {
-        Ok(self.shutdown_tx.send(()).await?)
+    pub async fn shutdown(&self) {
+        self.shutdown_tx
+            .send(())
+            .await
+            .expect("send should not fail")
     }
 
     async fn make_sync_request<
@@ -175,13 +175,29 @@ impl ProxyChannel {
     >(
         value: T,
         tx: &mpsc::Sender<SyncRequest<T, U>>,
-    ) -> Result<U, Box<dyn Error + Send + Sync>> {
+    ) -> U {
         let (response_tx, response_rx) = oneshot::channel();
-        tx.send(SyncRequest { value, response_tx }).await?;
-        Ok(response_rx.await?)
+        tx.send(SyncRequest { value, response_tx })
+            .await
+            .expect("send should not fail");
+        response_rx.await.expect("receive should not fail")
     }
 }
 
+#[derive(Debug)]
+pub enum ProxyError {
+    OutOfSync,
+}
+
+impl Error for ProxyError {}
+
+impl fmt::Display for ProxyError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ProxyError::OutOfSync => write!(f, "request not accepted when state is idle"),
+        }
+    }
+}
 pub struct ProxyService {
     state: State,
     advance_rx: mpsc::Receiver<AdvanceRequest>,
@@ -200,14 +216,28 @@ impl ProxyService {
             self.state = match self.state {
                 State::Idle(idle) => {
                     tokio::select! {
-                        // prioritize inspect over advance
                         biased;
 
+                        Some(request) = self.voucher_rx.recv() => {
+                            idle.reject_request(request)
+                        }
+                        Some(request) = self.notice_rx.recv() => {
+                            idle.reject_request(request)
+                        }
+                        Some(_) = self.report_rx.recv() => {
+                            idle.ignore_request()
+                        }
+                        Some(_) = self.accept_rx.recv() => {
+                            idle.ignore_request()
+                        }
+                        Some(_) = self.reject_rx.recv() => {
+                            idle.ignore_request()
+                        }
                         Some(request) = self.inspect_rx.recv() => {
-                            idle.inspect(request).await?
+                            idle.inspect(request).await
                         }
                         Some(request) = self.advance_rx.recv() => {
-                            idle.advance(request).await?
+                            idle.advance(request).await
                         }
                         Some(_) = self.shutdown_rx.recv() => {
                             return Ok(());
@@ -216,23 +246,22 @@ impl ProxyService {
                 }
                 State::Advancing(advancing) => {
                     tokio::select! {
-                        // prioritize vouchers/notices/reports over accept/reject
                         biased;
 
                         Some(request) = self.voucher_rx.recv() => {
-                            advancing.add_voucher(request).await?
+                            advancing.add_voucher(request).await
                         }
                         Some(request) = self.notice_rx.recv() => {
-                            advancing.add_notice(request).await?
+                            advancing.add_notice(request).await
                         }
                         Some(report) = self.report_rx.recv() => {
-                            advancing.add_report(report).await?
+                            advancing.add_report(report).await
                         }
                         Some(_) = self.accept_rx.recv() => {
-                            advancing.accept().await?
+                            advancing.accept().await
                         }
                         Some(_) = self.reject_rx.recv() => {
-                            advancing.reject().await?
+                            advancing.reject().await
                         }
                         Some(_) = self.shutdown_rx.recv() => {
                             return Ok(());
@@ -251,8 +280,8 @@ struct SyncRequest<T: Send + Sync, U: Send + Sync> {
 }
 
 type SyncInspectRequest = SyncRequest<InspectRequest, Vec<Report>>;
-type SyncVoucherRequest = SyncRequest<Voucher, u64>;
-type SyncNoticeRequest = SyncRequest<Notice, u64>;
+type SyncVoucherRequest = SyncRequest<Voucher, Result<u64, ProxyError>>;
+type SyncNoticeRequest = SyncRequest<Notice, Result<u64, ProxyError>>;
 
 enum State {
     Idle(IdleState),
@@ -260,13 +289,17 @@ enum State {
 }
 
 struct IdleState {
-    repository: Box<dyn Repository + Send>,
-    dapp: Box<dyn DApp + Send>,
+    repository: Box<dyn Repository + Send + Sync>,
+    dapp: Box<dyn DApp + Send + Sync>,
     id: u64,
 }
 
 impl IdleState {
-    fn new(repository: Box<dyn Repository + Send>, dapp: Box<dyn DApp + Send>, id: u64) -> State {
+    fn new(
+        repository: Box<dyn Repository + Send + Sync>,
+        dapp: Box<dyn DApp + Send + Sync>,
+        id: u64,
+    ) -> State {
         State::Idle(Self {
             repository,
             dapp,
@@ -274,33 +307,44 @@ impl IdleState {
         })
     }
 
-    async fn advance(self, request: AdvanceRequest) -> Result<State, Box<dyn Error + Send + Sync>> {
+    async fn advance(self, request: AdvanceRequest) -> State {
         let metadata = request.metadata.clone();
-        self.dapp.advance(request).await?;
-        Ok(AdvancingState::new(
-            self.repository,
-            self.dapp,
-            metadata,
-            self.id,
-        ))
+        // TODO ignore error and move on
+        self.dapp.advance(request).await.unwrap();
+
+        AdvancingState::new(self.repository, self.dapp, metadata, self.id)
     }
 
-    async fn inspect(
-        self,
-        request: SyncInspectRequest,
-    ) -> Result<State, Box<dyn Error + Send + Sync>> {
-        let response = self.dapp.inspect(request.value).await?;
+    async fn inspect(self, request: SyncInspectRequest) -> State {
+        // TODO ignore error and move on
+        let response = self.dapp.inspect(request.value).await.unwrap();
+
         request
             .response_tx
             .send(response)
-            .expect("oneshot channel dropped");
-        Ok(State::Idle(self))
+            .expect("send should not fail");
+        State::Idle(self)
+    }
+
+    fn reject_request<T: Send + Sync>(
+        self,
+        request: SyncRequest<T, Result<u64, ProxyError>>,
+    ) -> State {
+        request
+            .response_tx
+            .send(Err(ProxyError::OutOfSync))
+            .expect("send should not fail");
+        State::Idle(self)
+    }
+
+    fn ignore_request(self) -> State {
+        State::Idle(self)
     }
 }
 
 struct AdvancingState {
-    repository: Box<dyn Repository + Send>,
-    dapp: Box<dyn DApp + Send>,
+    repository: Box<dyn Repository + Send + Sync>,
+    dapp: Box<dyn DApp + Send + Sync>,
     metadata: AdvanceMetadata,
     previous_id: u64,
     current_id: u64,
@@ -310,8 +354,8 @@ struct AdvancingState {
 
 impl AdvancingState {
     fn new(
-        repository: Box<dyn Repository + Send>,
-        dapp: Box<dyn DApp + Send>,
+        repository: Box<dyn Repository + Send + Sync>,
+        dapp: Box<dyn DApp + Send + Sync>,
         metadata: AdvanceMetadata,
         id: u64,
     ) -> State {
@@ -326,47 +370,50 @@ impl AdvancingState {
         })
     }
 
-    async fn add_voucher(
-        mut self,
-        request: SyncVoucherRequest,
-    ) -> Result<State, Box<dyn Error + Send + Sync>> {
+    async fn add_voucher(mut self, request: SyncVoucherRequest) -> State {
         Self::add_identified(request, &mut self.vouchers, &mut self.current_id);
-        Ok(State::Advancing(self))
+        State::Advancing(self)
     }
 
-    async fn add_notice(
-        mut self,
-        request: SyncNoticeRequest,
-    ) -> Result<State, Box<dyn Error + Send + Sync>> {
+    async fn add_notice(mut self, request: SyncNoticeRequest) -> State {
         Self::add_identified(request, &mut self.notices, &mut self.current_id);
-        Ok(State::Advancing(self))
+        State::Advancing(self)
     }
 
-    async fn add_report(self, report: Report) -> Result<State, Box<dyn Error + Send + Sync>> {
-        self.repository.store_report(&self.metadata, report).await?;
-        Ok(State::Advancing(self))
+    async fn add_report(self, report: Report) -> State {
+        // TODO ignore error and move on
+        self.repository
+            .store_report(&self.metadata, report)
+            .await
+            .unwrap();
+
+        State::Advancing(self)
     }
 
-    async fn accept(self) -> Result<State, Box<dyn Error + Send + Sync>> {
+    async fn accept(self) -> State {
         if !self.vouchers.is_empty() {
+            // TODO ignore error and move on
             self.repository
                 .store_vouchers(&self.metadata, self.vouchers)
-                .await?;
+                .await
+                .unwrap();
         }
         if !self.notices.is_empty() {
+            // TODO ignore error and move on
             self.repository
                 .store_notices(&self.metadata, self.notices)
-                .await?;
+                .await
+                .unwrap();
         }
-        Ok(IdleState::new(self.repository, self.dapp, self.current_id))
+        IdleState::new(self.repository, self.dapp, self.current_id)
     }
 
-    async fn reject(self) -> Result<State, Box<dyn Error + Send + Sync>> {
-        Ok(IdleState::new(self.repository, self.dapp, self.previous_id))
+    async fn reject(self) -> State {
+        IdleState::new(self.repository, self.dapp, self.previous_id)
     }
 
     fn add_identified<T: Send + Sync>(
-        request: SyncRequest<T, u64>,
+        request: SyncRequest<T, Result<u64, ProxyError>>,
         vector: &mut Vec<Identified<T>>,
         id: &mut u64,
     ) {
@@ -376,8 +423,8 @@ impl AdvancingState {
         });
         request
             .response_tx
-            .send(*id)
-            .expect("oneshot channel dropped");
+            .send(Ok(*id))
+            .expect("send should not fail");
         *id = *id + 1;
     }
 }
@@ -386,7 +433,7 @@ impl AdvancingState {
 mod tests {
     use super::*;
     use std::sync::Arc;
-    use tokio::sync::{Notify, Semaphore};
+    use tokio::sync::Notify;
 
     #[tokio::test]
     async fn test_it_sends_an_advance_request() {
@@ -404,12 +451,12 @@ mod tests {
                     Ok(())
                 });
         }
-        let (mut proxy, service) = new(repository, dapp);
+        let (proxy, service) = new(repository, dapp);
         let service = tokio::spawn(service.run());
 
-        proxy.advance(request).await.unwrap();
+        proxy.advance(request).await;
         notify.notified().await;
-        proxy.shutdown().await.unwrap();
+        proxy.shutdown().await;
         service.await.unwrap().unwrap();
     }
 
@@ -435,42 +482,46 @@ mod tests {
                 .with(eq(request.clone()))
                 .return_once(move |_| Ok(response));
         }
-        let (mut proxy, service) = new(repository, dapp);
+        let (proxy, service) = new(repository, dapp);
         let service = tokio::spawn(service.run());
 
-        let got = proxy.inspect(request).await.unwrap();
+        let got = proxy.inspect(request).await;
         assert!(got == expected);
-        proxy.shutdown().await.unwrap();
+        proxy.shutdown().await;
         service.await.unwrap().unwrap();
     }
 
     #[tokio::test]
     async fn test_it_processes_multiple_advance_requests() {
-        let n = 3;
         let request = fake_advance_request();
-        let semaphore = Arc::new(Semaphore::new(0));
+        let notifies = vec![
+            Arc::new(Notify::new()),
+            Arc::new(Notify::new()),
+            Arc::new(Notify::new()),
+        ];
         let repository = Box::new(MockRepository::new());
         let mut dapp = Box::new(MockDApp::new());
-        {
-            let semaphore = semaphore.clone();
+        let mut sequence = Sequence::new();
+        for notify in &notifies {
+            let notify = notify.clone();
             dapp.expect_advance()
-                .times(3)
+                .times(1)
+                .in_sequence(&mut sequence)
                 .with(eq(request.clone()))
                 .returning(move |_| {
-                    semaphore.add_permits(1);
+                    notify.notify_one();
                     Ok(())
                 });
         }
-        let (mut proxy, service) = new(repository, dapp);
+        let (proxy, service) = new(repository, dapp);
         let service = tokio::spawn(service.run());
 
-        for _ in 0..n {
-            proxy.advance(request.clone()).await.unwrap();
-            proxy.accept().await.unwrap();
+        for notify in notifies {
+            proxy.advance(request.clone()).await;
+            notify.notified().await;
+            proxy.accept().await;
         }
-        let _ = semaphore.acquire_many(n).await.unwrap();
-        assert_eq!(semaphore.available_permits(), 3);
-        proxy.shutdown().await.unwrap();
+        proxy.shutdown().await;
         service.await.unwrap().unwrap();
     }
 
@@ -506,22 +557,46 @@ mod tests {
                     Ok(())
                 });
         }
-        let (mut proxy, service) = new(repository, dapp);
+        let (proxy, service) = new(repository, dapp);
         let service = tokio::spawn(service.run());
 
-        proxy.advance(advance_request.clone()).await.unwrap();
+        proxy.advance(advance_request.clone()).await;
         advance_notify[0].notified().await;
         // Send both an advance and an inspect while processing the first advance
-        proxy.advance(advance_request.clone()).await.unwrap();
+        proxy.advance(advance_request.clone()).await;
         let inspect_handle = {
-            let mut proxy = proxy.clone();
-            tokio::spawn(async move { proxy.inspect(inspect_request).await.unwrap() })
+            let proxy = proxy.clone();
+            tokio::spawn(async move { proxy.inspect(inspect_request).await })
         };
-        proxy.accept().await.unwrap(); // Finish processing the first advance
-        inspect_handle.await.unwrap(); // The inspect comes first
-        proxy.accept().await.unwrap(); // Then comes the second advance
-        advance_notify[1].notified().await;
-        proxy.shutdown().await.unwrap();
+        proxy.accept().await; // Accept the first advance
+        inspect_handle.await.unwrap(); // Wait for the inspect to finish first
+        advance_notify[1].notified().await; // Then wait for the second advance
+        proxy.accept().await; // Finally, accept the second advance
+        proxy.shutdown().await;
+        service.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_it_rejects_vouchers_and_notices_when_idle() {
+        let repository = Box::new(MockRepository::new());
+        let dapp = Box::new(MockDApp::new());
+        let (proxy, service) = new(repository, dapp);
+        let service = tokio::spawn(service.run());
+
+        let result = proxy
+            .add_notice(Notice {
+                payload: String::from("notice 0"),
+            })
+            .await;
+        assert!(matches!(result, Err(ProxyError::OutOfSync)));
+        let result = proxy
+            .add_voucher(Voucher {
+                address: String::from("0x0001"),
+                payload: String::from("voucher 0"),
+            })
+            .await;
+        assert!(matches!(result, Err(ProxyError::OutOfSync)));
+        proxy.shutdown().await;
         service.await.unwrap().unwrap();
     }
 
@@ -559,16 +634,16 @@ mod tests {
                 Ok(())
             });
         }
-        let (mut proxy, service) = new(repository, dapp);
+        let (proxy, service) = new(repository, dapp);
         let service = tokio::spawn(service.run());
 
-        proxy.advance(request).await.unwrap();
+        proxy.advance(request).await;
         notify.notified().await;
         for voucher in vouchers {
             proxy.add_voucher(voucher.value.clone()).await.unwrap();
         }
-        proxy.accept().await.unwrap();
-        proxy.shutdown().await.unwrap();
+        proxy.accept().await;
+        proxy.shutdown().await;
         service.await.unwrap().unwrap();
     }
 
@@ -604,16 +679,16 @@ mod tests {
                 Ok(())
             });
         }
-        let (mut proxy, service) = new(repository, dapp);
+        let (proxy, service) = new(repository, dapp);
         let service = tokio::spawn(service.run());
 
-        proxy.advance(request.clone()).await.unwrap();
+        proxy.advance(request.clone()).await;
         notify.notified().await;
         for notice in notices {
             proxy.add_notice(notice.value.clone()).await.unwrap();
         }
-        proxy.accept().await.unwrap();
-        proxy.shutdown().await.unwrap();
+        proxy.accept().await;
+        proxy.shutdown().await;
         service.await.unwrap().unwrap();
     }
 
@@ -638,14 +713,14 @@ mod tests {
                 Ok(())
             });
         }
-        let (mut proxy, service) = new(repository, dapp);
+        let (proxy, service) = new(repository, dapp);
         let service = tokio::spawn(service.run());
 
-        proxy.advance(request.clone()).await.unwrap();
+        proxy.advance(request.clone()).await;
         notify.notified().await;
-        proxy.add_report(report).await.unwrap();
-        proxy.accept().await.unwrap();
-        proxy.shutdown().await.unwrap();
+        proxy.add_report(report).await;
+        proxy.accept().await;
+        proxy.shutdown().await;
         service.await.unwrap().unwrap();
     }
 
@@ -660,6 +735,7 @@ mod tests {
             payload: String::from("notice 0"),
         };
         let notify = Arc::new(Notify::new());
+        // The test passes only because the repository mock expects nothing
         let repository = Box::new(MockRepository::new());
         let mut dapp = Box::new(MockDApp::new());
         {
@@ -669,15 +745,15 @@ mod tests {
                 Ok(())
             });
         }
-        let (mut proxy, service) = new(repository, dapp);
+        let (proxy, service) = new(repository, dapp);
         let service = tokio::spawn(service.run());
 
-        proxy.advance(request).await.unwrap();
+        proxy.advance(request).await;
         notify.notified().await;
         proxy.add_voucher(voucher).await.unwrap();
         proxy.add_notice(notice).await.unwrap();
-        proxy.reject().await.unwrap(); // changing to accept makes the test fail as expected
-        proxy.shutdown().await.unwrap();
+        proxy.reject().await;
+        proxy.shutdown().await;
         service.await.unwrap().unwrap();
     }
 

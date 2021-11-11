@@ -16,9 +16,9 @@ use std::error::Error;
 
 use super::config::Config;
 use super::model::{Notice, Report, Voucher};
-use super::proxy::ProxyChannel;
+use super::proxy::{ProxyChannel, ProxyError};
 
-/// Creates the server and start it
+/// Setup the HTTP server that receives requests from the DApp backend
 pub async fn run(config: &Config, proxy: ProxyChannel) -> Result<(), Box<dyn Error + Send + Sync>> {
     let figment = rocket::Config::figment()
         .merge(("address", config.proxy_http_address))
@@ -27,8 +27,8 @@ pub async fn run(config: &Config, proxy: ProxyChannel) -> Result<(), Box<dyn Err
         .manage(proxy)
         .mount("/", rocket::routes![voucher, notice, report, finish])
         .launch()
-        .await?;
-    Ok(())
+        .await
+        .map_err(|e| e.into())
 }
 
 #[rocket::post("/voucher", data = "<voucher>")]
@@ -43,14 +43,21 @@ async fn notice(notice: Json<Notice>, proxy: &State<ProxyChannel>) -> IdResponde
 
 #[rocket::post("/report", data = "<report>")]
 async fn report(report: Json<Report>, proxy: &State<ProxyChannel>) -> Status {
-    check_accept(proxy.add_report(report.0).await)
+    proxy.add_report(report.0).await;
+    Status::Accepted
 }
 
 #[rocket::post("/finish", data = "<body>")]
 async fn finish(body: Json<FinishBody<'_>>, proxy: &State<ProxyChannel>) -> Status {
     match body.status {
-        "accept" => check_accept(proxy.accept().await),
-        "reject" => check_accept(proxy.reject().await),
+        "accept" => {
+            proxy.accept().await;
+            Status::Accepted
+        }
+        "reject" => {
+            proxy.reject().await;
+            Status::Accepted
+        }
         _ => Status::UnprocessableEntity,
     }
 }
@@ -64,23 +71,18 @@ struct IdResponse {
 enum IdResponder {
     #[response(status = 201)]
     Created(Json<IdResponse>),
-    #[response(status = 500)]
-    InternalServerError(()),
+    #[response(status = 409)]
+    OutOfSync(()),
 }
 
 impl IdResponder {
-    fn from(add_result: Result<u64, Box<dyn Error + Send + Sync>>) -> Self {
+    fn from(add_result: Result<u64, ProxyError>) -> Self {
         match add_result {
             Ok(id) => IdResponder::Created(Json(IdResponse { id })),
-            Err(_) => IdResponder::InternalServerError(()),
+            Err(error) => match error {
+                ProxyError::OutOfSync => IdResponder::OutOfSync(()),
+            },
         }
-    }
-}
-
-fn check_accept(result: Result<(), Box<dyn Error + Send + Sync>>) -> Status {
-    match result {
-        Ok(()) => Status::Accepted,
-        Err(_) => Status::InternalServerError,
     }
 }
 
