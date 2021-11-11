@@ -11,33 +11,77 @@
 // specific language governing permissions and limitations under the License.
 
 use async_trait::async_trait;
-use std::error::Error;
+use reqwest::{Client, StatusCode};
+use std::{error::Error, fmt};
 
+use super::config::Config;
 use super::model::{AdvanceRequest, InspectRequest, Report};
 use super::proxy::DApp;
 
-pub struct DAppClient {}
+/// HTTP client for the DApp backend
+pub struct DAppClient {
+    url: String,
+    client: Client,
+}
 
 impl DAppClient {
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(config: &Config) -> Self {
+        Self {
+            url: format!(
+                "http://{}:{}",
+                config.dapp_http_address, config.dapp_http_address
+            ),
+            client: Client::new(),
+        }
     }
 }
 
 #[async_trait]
 impl DApp for DAppClient {
-    async fn advance(&self, _request: AdvanceRequest) -> Result<(), Box<dyn Error + Send + Sync>> {
-        // unimplemented!()
-        Ok(())
+    async fn advance(&self, request: AdvanceRequest) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let response = self.client.post(&self.url).json(&request).send().await?;
+        check_status(StatusCode::ACCEPTED, response.status())
     }
 
     async fn inspect(
         &self,
-        _request: InspectRequest,
+        request: InspectRequest,
     ) -> Result<Vec<Report>, Box<dyn Error + Send + Sync>> {
-        // unimplemented!()
-        Ok(vec![Report {
-            payload: String::from("<placeholder report>"),
-        }])
+        let response = self.client.get(&self.url).json(&request).send().await?;
+        check_status(StatusCode::OK, response.status())?;
+        Ok(response.json().await?)
+    }
+}
+
+#[derive(Debug)]
+pub enum DAppError {
+    StatusError {
+        expected: StatusCode,
+        obtained: StatusCode,
+    },
+}
+
+impl Error for DAppError {}
+
+impl fmt::Display for DAppError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            DAppError::StatusError { expected, obtained } => write!(
+                f,
+                "wrong status in http call; expected {} but got {}",
+                expected, obtained
+            ),
+        }
+    }
+}
+
+fn check_status(
+    expected: StatusCode,
+    obtained: StatusCode,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    if expected != obtained {
+        Err(Box::new(DAppError::StatusError { expected, obtained }))
+    } else {
+        Ok(())
     }
 }

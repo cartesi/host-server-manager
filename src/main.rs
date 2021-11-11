@@ -32,7 +32,7 @@ use repository::MemRepository;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let config = Config::new();
-    let dapp_client = Box::new(DAppClient::new());
+    let dapp_client = Box::new(DAppClient::new(&config));
     let repository = Box::new(MemRepository::new());
     let (proxy_channel, proxy_service) = proxy::new(repository, dapp_client);
     let proxy_service = proxy_service.run();
