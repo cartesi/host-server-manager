@@ -8,13 +8,14 @@ name = "mock-rollups-machine-manager"
 path = "src/main.rs"
 
 [dependencies]
+actix-web = "4.0.0-beta.11"
 async-trait = "0.1"
-prost = "0.8"
+env_logger = "0.9"
+prost = "0.9"
 reqwest = { version = "0.11", features = ["json"] }
-rocket = { version = "0.5.0-rc.1", features = ["json"] }
 serde = "1.0"
-tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
-tonic = "0.5"
+tokio = { version = "1.14", features = ["macros", "time", "rt-multi-thread"] }
+tonic = "0.6"
 
 [dev-dependencies]
 mockall = "0.10"

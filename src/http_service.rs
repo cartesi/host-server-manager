@@ -10,7 +10,10 @@
 // CONDITIONS OF ANY KIND, either express or implied. See the License for the
 // specific language governing permissions and limitations under the License.
 
-use rocket::{http::Status, serde::json::Json, Responder, State};
+use actix_web::{
+    error::ResponseError, http::StatusCode, middleware::Logger, web::Data, web::Json, App,
+    HttpResponse, HttpServer, Responder,
+};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 
@@ -20,46 +23,63 @@ use super::proxy::{ProxyChannel, ProxyError};
 
 /// Setup the HTTP server that receives requests from the DApp backend
 pub async fn run(config: &Config, proxy: ProxyChannel) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let figment = rocket::Config::figment()
-        .merge(("address", config.proxy_http_address))
-        .merge(("port", config.proxy_http_port));
-    rocket::custom(figment)
-        .manage(proxy)
-        .mount("/", rocket::routes![voucher, notice, report, finish])
-        .launch()
-        .await
-        .map_err(|e| e.into())
+    HttpServer::new(move || {
+        App::new()
+            .app_data(Data::new(proxy.clone()))
+            .wrap(Logger::default())
+            .service(voucher)
+            .service(notice)
+            .service(report)
+            .service(finish)
+    })
+    .bind((config.proxy_http_address, config.proxy_http_port))?
+    .run()
+    .await
+    .map_err(|e| e.into())
 }
 
-#[rocket::post("/voucher", data = "<voucher>")]
-async fn voucher(voucher: Json<Voucher>, proxy: &State<ProxyChannel>) -> IdResponder {
-    IdResponder::from(proxy.add_voucher(voucher.0).await)
+#[actix_web::post("/voucher")]
+async fn voucher(
+    voucher: Json<Voucher>,
+    proxy: Data<ProxyChannel>,
+) -> Result<impl Responder, ProxyError> {
+    let id = proxy.add_voucher(voucher.0).await?;
+    Ok(HttpResponse::Created().json(IdResponse { id }))
 }
 
-#[rocket::post("/notice", data = "<notice>")]
-async fn notice(notice: Json<Notice>, proxy: &State<ProxyChannel>) -> IdResponder {
-    IdResponder::from(proxy.add_notice(notice.0).await)
+#[actix_web::post("/notice")]
+async fn notice(
+    notice: Json<Notice>,
+    proxy: Data<ProxyChannel>,
+) -> Result<impl Responder, ProxyError> {
+    let id = proxy.add_notice(notice.0).await?;
+    Ok(HttpResponse::Created().json(IdResponse { id }))
 }
 
-#[rocket::post("/report", data = "<report>")]
-async fn report(report: Json<Report>, proxy: &State<ProxyChannel>) -> Status {
+#[actix_web::post("/report")]
+async fn report(report: Json<Report>, proxy: Data<ProxyChannel>) -> impl Responder {
     proxy.add_report(report.0).await;
-    Status::Accepted
+    HttpResponse::Accepted()
 }
 
-#[rocket::post("/finish", data = "<body>")]
-async fn finish(body: Json<FinishBody<'_>>, proxy: &State<ProxyChannel>) -> Status {
-    match body.status {
+#[actix_web::post("/report")]
+async fn finish(body: Json<FinishRequest>, proxy: Data<ProxyChannel>) -> impl Responder {
+    match body.status.as_str() {
         "accept" => {
             proxy.accept().await;
-            Status::Accepted
+            HttpResponse::Accepted()
         }
         "reject" => {
             proxy.reject().await;
-            Status::Accepted
+            HttpResponse::Accepted()
         }
-        _ => Status::UnprocessableEntity,
+        _ => HttpResponse::UnprocessableEntity(),
     }
+}
+
+#[derive(Deserialize)]
+struct FinishRequest {
+    status: String,
 }
 
 #[derive(Serialize)]
@@ -67,26 +87,16 @@ struct IdResponse {
     id: u64,
 }
 
-#[derive(Responder)]
-enum IdResponder {
-    #[response(status = 201)]
-    Created(Json<IdResponse>),
-    #[response(status = 409)]
-    OutOfSync(()),
-}
-
-impl IdResponder {
-    fn from(add_result: Result<u64, ProxyError>) -> Self {
-        match add_result {
-            Ok(id) => IdResponder::Created(Json(IdResponse { id })),
-            Err(error) => match error {
-                ProxyError::OutOfSync => IdResponder::OutOfSync(()),
-            },
+impl ResponseError for ProxyError {
+    fn error_response(&self) -> HttpResponse {
+        match *self {
+            ProxyError::OutOfSync => HttpResponse::Conflict().body(self.to_string()),
         }
     }
-}
 
-#[derive(Deserialize)]
-struct FinishBody<'a> {
-    status: &'a str,
+    fn status_code(&self) -> StatusCode {
+        match *self {
+            ProxyError::OutOfSync => StatusCode::CONFLICT,
+        }
+    }
 }

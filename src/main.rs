@@ -22,15 +22,12 @@ mod model;
 mod proxy;
 mod repository;
 
-use std::error::Error;
-use tokio;
-
 use config::Config;
 use dapp_client::DAppClient;
 use repository::MemRepository;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
+#[actix_web::main]
+async fn main() {
     let config = Config::new();
     let dapp_client = Box::new(DAppClient::new(&config));
     let repository = Box::new(MemRepository::new());
@@ -38,6 +35,19 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let proxy_service = proxy_service.run();
     let http_service = http_service::run(&config, proxy_channel.clone());
     let grpc_service = grpc_service::run(proxy_channel);
-    tokio::try_join!(proxy_service, http_service, grpc_service)?;
-    Ok(())
+
+    std::env::set_var("RUST_LOG", "actix_web=info");
+    env_logger::init();
+
+    tokio::select! {
+        _ = proxy_service => {
+            println!("proxy service terminated");
+        }
+        _ = http_service => {
+            println!("http service terminated");
+        }
+        _ = grpc_service => {
+            println!("grpc service terminated");
+        }
+    }
 }

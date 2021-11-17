@@ -211,7 +211,7 @@ pub struct ProxyService {
 }
 
 impl ProxyService {
-    pub async fn run(mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
+    pub async fn run(mut self) {
         loop {
             self.state = match self.state {
                 State::Idle(idle) => {
@@ -240,7 +240,7 @@ impl ProxyService {
                             idle.advance(request).await
                         }
                         Some(_) = self.shutdown_rx.recv() => {
-                            return Ok(());
+                            return;
                         }
                     }
                 }
@@ -264,7 +264,7 @@ impl ProxyService {
                             advancing.reject().await
                         }
                         Some(_) = self.shutdown_rx.recv() => {
-                            return Ok(());
+                            return;
                         }
                     }
                 }
@@ -457,7 +457,7 @@ mod tests {
         proxy.advance(request).await;
         notify.notified().await;
         proxy.shutdown().await;
-        service.await.unwrap().unwrap();
+        service.await.unwrap();
     }
 
     #[tokio::test]
@@ -488,7 +488,7 @@ mod tests {
         let got = proxy.inspect(request).await;
         assert!(got == expected);
         proxy.shutdown().await;
-        service.await.unwrap().unwrap();
+        service.await.unwrap();
     }
 
     #[tokio::test]
@@ -522,7 +522,7 @@ mod tests {
             proxy.accept().await;
         }
         proxy.shutdown().await;
-        service.await.unwrap().unwrap();
+        service.await.unwrap();
     }
 
     #[tokio::test]
@@ -573,7 +573,7 @@ mod tests {
         advance_notify[1].notified().await; // Then wait for the second advance
         proxy.accept().await; // Finally, accept the second advance
         proxy.shutdown().await;
-        service.await.unwrap().unwrap();
+        service.await.unwrap();
     }
 
     #[tokio::test]
@@ -597,7 +597,7 @@ mod tests {
             .await;
         assert!(matches!(result, Err(ProxyError::OutOfSync)));
         proxy.shutdown().await;
-        service.await.unwrap().unwrap();
+        service.await.unwrap();
     }
 
     #[tokio::test]
@@ -644,7 +644,7 @@ mod tests {
         }
         proxy.accept().await;
         proxy.shutdown().await;
-        service.await.unwrap().unwrap();
+        service.await.unwrap();
     }
 
     #[tokio::test]
@@ -689,7 +689,7 @@ mod tests {
         }
         proxy.accept().await;
         proxy.shutdown().await;
-        service.await.unwrap().unwrap();
+        service.await.unwrap();
     }
 
     #[tokio::test]
@@ -721,7 +721,7 @@ mod tests {
         proxy.add_report(report).await;
         proxy.accept().await;
         proxy.shutdown().await;
-        service.await.unwrap().unwrap();
+        service.await.unwrap();
     }
 
     #[tokio::test]
@@ -754,7 +754,7 @@ mod tests {
         proxy.add_notice(notice).await.unwrap();
         proxy.reject().await;
         proxy.shutdown().await;
-        service.await.unwrap().unwrap();
+        service.await.unwrap();
     }
 
     fn fake_advance_request() -> AdvanceRequest {

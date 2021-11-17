@@ -20,9 +20,9 @@ pub struct Config {
 impl Config {
     pub fn new() -> Self {
         Self {
-            proxy_http_address: "0.0.0.0",
+            proxy_http_address: "127.0.0.1",
             proxy_http_port: 5555,
-            dapp_http_address: "0.0.0.0",
+            dapp_http_address: "127.0.0.1",
             dapp_http_port: 6666,
         }
     }
