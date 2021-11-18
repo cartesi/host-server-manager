@@ -918,6 +918,7 @@ dependencies = [
  "actix-web",
  "async-trait",
  "env_logger",
+ "log",
  "mockall",
  "prost 0.9.0",
  "reqwest",

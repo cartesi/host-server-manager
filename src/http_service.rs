@@ -19,7 +19,7 @@ use std::error::Error;
 
 use super::config::Config;
 use super::model::{Notice, Report, Voucher};
-use super::proxy::{ProxyChannel, ProxyError};
+use super::proxy::{InsertError, ProxyChannel};
 
 /// Setup the HTTP server that receives requests from the DApp backend
 pub async fn run(config: &Config, proxy: ProxyChannel) -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -42,23 +42,27 @@ pub async fn run(config: &Config, proxy: ProxyChannel) -> Result<(), Box<dyn Err
 async fn voucher(
     voucher: Json<Voucher>,
     proxy: Data<ProxyChannel>,
-) -> Result<impl Responder, ProxyError> {
-    let id = proxy.add_voucher(voucher.0).await?;
-    Ok(HttpResponse::Created().json(IdResponse { id }))
+) -> Result<impl Responder, InsertError> {
+    proxy
+        .insert_voucher(voucher.0)
+        .await
+        .map(|id| HttpResponse::Created().json(IdResponse { id }))
 }
 
 #[actix_web::post("/notice")]
 async fn notice(
     notice: Json<Notice>,
     proxy: Data<ProxyChannel>,
-) -> Result<impl Responder, ProxyError> {
-    let id = proxy.add_notice(notice.0).await?;
-    Ok(HttpResponse::Created().json(IdResponse { id }))
+) -> Result<impl Responder, InsertError> {
+    proxy
+        .insert_notice(notice.0)
+        .await
+        .map(|id| HttpResponse::Created().json(IdResponse { id }))
 }
 
 #[actix_web::post("/report")]
 async fn report(report: Json<Report>, proxy: Data<ProxyChannel>) -> impl Responder {
-    proxy.add_report(report.0).await;
+    proxy.insert_report(report.0).await;
     HttpResponse::Accepted()
 }
 
@@ -87,16 +91,12 @@ struct IdResponse {
     id: u64,
 }
 
-impl ResponseError for ProxyError {
+impl ResponseError for InsertError {
     fn error_response(&self) -> HttpResponse {
-        match *self {
-            ProxyError::OutOfSync => HttpResponse::Conflict().body(self.to_string()),
-        }
+        HttpResponse::Conflict().body(self.to_string())
     }
 
     fn status_code(&self) -> StatusCode {
-        match *self {
-            ProxyError::OutOfSync => StatusCode::CONFLICT,
-        }
+        StatusCode::CONFLICT
     }
 }

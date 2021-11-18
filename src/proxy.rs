@@ -129,22 +129,22 @@ impl ProxyChannel {
     }
 
     /// Send an inspect request and wait for the report
-    pub async fn inspect(&self, request: InspectRequest) -> Vec<Report> {
+    pub async fn inspect(&self, request: InspectRequest) -> Result<Vec<Report>, InspectError> {
         Self::make_sync_request(request, &self.inspect_tx).await
     }
 
     /// Send a voucher request
-    pub async fn add_voucher(&self, voucher: Voucher) -> Result<u64, ProxyError> {
+    pub async fn insert_voucher(&self, voucher: Voucher) -> Result<u64, InsertError> {
         Self::make_sync_request(voucher, &self.voucher_tx).await
     }
 
     /// Send a notice request
-    pub async fn add_notice(&self, notice: Notice) -> Result<u64, ProxyError> {
+    pub async fn insert_notice(&self, notice: Notice) -> Result<u64, InsertError> {
         Self::make_sync_request(notice, &self.notice_tx).await
     }
 
     /// Send a report request
-    pub async fn add_report(&self, request: Report) {
+    pub async fn insert_report(&self, request: Report) {
         self.report_tx
             .send(request)
             .await
@@ -185,19 +185,23 @@ impl ProxyChannel {
 }
 
 #[derive(Debug)]
-pub enum ProxyError {
-    OutOfSync,
-}
-
-impl Error for ProxyError {}
-
-impl fmt::Display for ProxyError {
+pub struct InsertError();
+impl Error for InsertError {}
+impl fmt::Display for InsertError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            ProxyError::OutOfSync => write!(f, "request not accepted when state is idle"),
-        }
+        write!(f, "request not accepted when state is idle")
     }
 }
+
+#[derive(Debug)]
+pub struct InspectError();
+impl Error for InspectError {}
+impl fmt::Display for InspectError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "failed to send inspect request to dapp")
+    }
+}
+
 pub struct ProxyService {
     state: State,
     advance_rx: mpsc::Receiver<AdvanceRequest>,
@@ -219,19 +223,19 @@ impl ProxyService {
                         biased;
 
                         Some(request) = self.voucher_rx.recv() => {
-                            idle.reject_request(request)
+                            idle.insert_voucher(request)
                         }
                         Some(request) = self.notice_rx.recv() => {
-                            idle.reject_request(request)
+                            idle.insert_notice(request)
                         }
                         Some(_) = self.report_rx.recv() => {
-                            idle.ignore_request()
+                            idle.insert_report()
                         }
                         Some(_) = self.accept_rx.recv() => {
-                            idle.ignore_request()
+                            idle.accept()
                         }
                         Some(_) = self.reject_rx.recv() => {
-                            idle.ignore_request()
+                            idle.reject()
                         }
                         Some(request) = self.inspect_rx.recv() => {
                             idle.inspect(request).await
@@ -248,14 +252,16 @@ impl ProxyService {
                     tokio::select! {
                         biased;
 
+                        // Do not handle inspect and advance requests when advancing
+
                         Some(request) = self.voucher_rx.recv() => {
-                            advancing.add_voucher(request).await
+                            advancing.insert_voucher(request).await
                         }
                         Some(request) = self.notice_rx.recv() => {
-                            advancing.add_notice(request).await
+                            advancing.insert_notice(request).await
                         }
                         Some(report) = self.report_rx.recv() => {
-                            advancing.add_report(report).await
+                            advancing.insert_report(report).await
                         }
                         Some(_) = self.accept_rx.recv() => {
                             advancing.accept().await
@@ -279,9 +285,9 @@ struct SyncRequest<T: Send + Sync, U: Send + Sync> {
     response_tx: oneshot::Sender<U>,
 }
 
-type SyncInspectRequest = SyncRequest<InspectRequest, Vec<Report>>;
-type SyncVoucherRequest = SyncRequest<Voucher, Result<u64, ProxyError>>;
-type SyncNoticeRequest = SyncRequest<Notice, Result<u64, ProxyError>>;
+type SyncInspectRequest = SyncRequest<InspectRequest, Result<Vec<Report>, InspectError>>;
+type SyncVoucherRequest = SyncRequest<Voucher, Result<u64, InsertError>>;
+type SyncNoticeRequest = SyncRequest<Notice, Result<u64, InsertError>>;
 
 enum State {
     Idle(IdleState),
@@ -307,18 +313,53 @@ impl IdleState {
         })
     }
 
+    fn insert_voucher(self, request: SyncVoucherRequest) -> State {
+        log::warn!("ignoring voucher when idle");
+        Self::reject_request(request);
+        State::Idle(self)
+    }
+
+    fn insert_notice(self, request: SyncNoticeRequest) -> State {
+        log::warn!("ignoring notice when idle");
+        Self::reject_request(request);
+        State::Idle(self)
+    }
+
+    fn insert_report(self) -> State {
+        log::warn!("ignoring report when idle");
+        State::Idle(self)
+    }
+
+    fn accept(self) -> State {
+        log::warn!("ignoring accept when idle");
+        State::Idle(self)
+    }
+
+    fn reject(self) -> State {
+        log::warn!("ignoring reject when idle");
+        State::Idle(self)
+    }
+
     async fn advance(self, request: AdvanceRequest) -> State {
         let metadata = request.metadata.clone();
-        // TODO ignore error and move on
-        self.dapp.advance(request).await.unwrap();
-
-        AdvancingState::new(self.repository, self.dapp, metadata, self.id)
+        match self.dapp.advance(request).await {
+            Ok(_) => {
+                log::info!("setting state to advance");
+                AdvancingState::new(self.repository, self.dapp, metadata, self.id)
+            }
+            Err(e) => {
+                log::error!("failed to advance state with error: {}", e);
+                State::Idle(self)
+            }
+        }
     }
 
     async fn inspect(self, request: SyncInspectRequest) -> State {
-        // TODO ignore error and move on
-        let response = self.dapp.inspect(request.value).await.unwrap();
-
+        log::info!("processing inspect request");
+        let response = self.dapp.inspect(request.value).await.map_err(|e| {
+            log::error!("failed to inspect with error: {}", e);
+            InspectError()
+        });
         request
             .response_tx
             .send(response)
@@ -326,19 +367,11 @@ impl IdleState {
         State::Idle(self)
     }
 
-    fn reject_request<T: Send + Sync>(
-        self,
-        request: SyncRequest<T, Result<u64, ProxyError>>,
-    ) -> State {
+    fn reject_request<T: Send + Sync>(request: SyncRequest<T, Result<u64, InsertError>>) {
         request
             .response_tx
-            .send(Err(ProxyError::OutOfSync))
+            .send(Err(InsertError()))
             .expect("send should not fail");
-        State::Idle(self)
-    }
-
-    fn ignore_request(self) -> State {
-        State::Idle(self)
     }
 }
 
@@ -370,50 +403,56 @@ impl AdvancingState {
         })
     }
 
-    async fn add_voucher(mut self, request: SyncVoucherRequest) -> State {
-        Self::add_identified(request, &mut self.vouchers, &mut self.current_id);
+    async fn insert_voucher(mut self, request: SyncVoucherRequest) -> State {
+        log::info!("processing voucher request");
+        Self::insert_identified(request, &mut self.vouchers, &mut self.current_id);
         State::Advancing(self)
     }
 
-    async fn add_notice(mut self, request: SyncNoticeRequest) -> State {
-        Self::add_identified(request, &mut self.notices, &mut self.current_id);
+    async fn insert_notice(mut self, request: SyncNoticeRequest) -> State {
+        log::info!("processing notice request");
+        Self::insert_identified(request, &mut self.notices, &mut self.current_id);
         State::Advancing(self)
     }
 
-    async fn add_report(self, report: Report) -> State {
-        // TODO ignore error and move on
-        self.repository
-            .store_report(&self.metadata, report)
-            .await
-            .unwrap();
-
+    async fn insert_report(self, report: Report) -> State {
+        log::info!("processing report request");
+        if let Err(e) = self.repository.store_report(&self.metadata, report).await {
+            log::error!("failed to store report with error: {}", e);
+        }
         State::Advancing(self)
     }
 
     async fn accept(self) -> State {
+        log::info!("processing accept request; setting state to idle");
         if !self.vouchers.is_empty() {
-            // TODO ignore error and move on
-            self.repository
+            if let Err(e) = self
+                .repository
                 .store_vouchers(&self.metadata, self.vouchers)
                 .await
-                .unwrap();
+            {
+                log::error!("failed to store vouchers with error: {}", e);
+            }
         }
         if !self.notices.is_empty() {
-            // TODO ignore error and move on
-            self.repository
+            if let Err(e) = self
+                .repository
                 .store_notices(&self.metadata, self.notices)
                 .await
-                .unwrap();
+            {
+                log::error!("failed to store notices with error: {}", e);
+            }
         }
         IdleState::new(self.repository, self.dapp, self.current_id)
     }
 
     async fn reject(self) -> State {
+        log::info!("processing reject request; setting state to idle");
         IdleState::new(self.repository, self.dapp, self.previous_id)
     }
 
-    fn add_identified<T: Send + Sync>(
-        request: SyncRequest<T, Result<u64, ProxyError>>,
+    fn insert_identified<T: Send + Sync>(
+        request: SyncRequest<T, Result<u64, InsertError>>,
         vector: &mut Vec<Identified<T>>,
         id: &mut u64,
     ) {
@@ -485,7 +524,7 @@ mod tests {
         let (proxy, service) = new(repository, dapp);
         let service = tokio::spawn(service.run());
 
-        let got = proxy.inspect(request).await;
+        let got = proxy.inspect(request).await.unwrap();
         assert!(got == expected);
         proxy.shutdown().await;
         service.await.unwrap();
@@ -566,7 +605,7 @@ mod tests {
         proxy.advance(advance_request.clone()).await;
         let inspect_handle = {
             let proxy = proxy.clone();
-            tokio::spawn(async move { proxy.inspect(inspect_request).await })
+            tokio::spawn(async move { proxy.inspect(inspect_request).await.unwrap() })
         };
         proxy.accept().await; // Accept the first advance
         inspect_handle.await.unwrap(); // Wait for the inspect to finish first
@@ -584,18 +623,18 @@ mod tests {
         let service = tokio::spawn(service.run());
 
         let result = proxy
-            .add_notice(Notice {
+            .insert_notice(Notice {
                 payload: String::from("notice 0"),
             })
             .await;
-        assert!(matches!(result, Err(ProxyError::OutOfSync)));
+        assert!(matches!(result, Err(InsertError())));
         let result = proxy
-            .add_voucher(Voucher {
+            .insert_voucher(Voucher {
                 address: String::from("0x0001"),
                 payload: String::from("voucher 0"),
             })
             .await;
-        assert!(matches!(result, Err(ProxyError::OutOfSync)));
+        assert!(matches!(result, Err(InsertError())));
         proxy.shutdown().await;
         service.await.unwrap();
     }
@@ -640,7 +679,7 @@ mod tests {
         proxy.advance(request).await;
         notify.notified().await;
         for voucher in vouchers {
-            proxy.add_voucher(voucher.value.clone()).await.unwrap();
+            proxy.insert_voucher(voucher.value.clone()).await.unwrap();
         }
         proxy.accept().await;
         proxy.shutdown().await;
@@ -685,7 +724,7 @@ mod tests {
         proxy.advance(request.clone()).await;
         notify.notified().await;
         for notice in notices {
-            proxy.add_notice(notice.value.clone()).await.unwrap();
+            proxy.insert_notice(notice.value.clone()).await.unwrap();
         }
         proxy.accept().await;
         proxy.shutdown().await;
@@ -718,7 +757,7 @@ mod tests {
 
         proxy.advance(request.clone()).await;
         notify.notified().await;
-        proxy.add_report(report).await;
+        proxy.insert_report(report).await;
         proxy.accept().await;
         proxy.shutdown().await;
         service.await.unwrap();
@@ -750,8 +789,8 @@ mod tests {
 
         proxy.advance(request).await;
         notify.notified().await;
-        proxy.add_voucher(voucher).await.unwrap();
-        proxy.add_notice(notice).await.unwrap();
+        proxy.insert_voucher(voucher).await.unwrap();
+        proxy.insert_notice(notice).await.unwrap();
         proxy.reject().await;
         proxy.shutdown().await;
         service.await.unwrap();

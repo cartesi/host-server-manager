@@ -36,18 +36,24 @@ async fn main() {
     let http_service = http_service::run(&config, proxy_channel.clone());
     let grpc_service = grpc_service::run(proxy_channel);
 
-    std::env::set_var("RUST_LOG", "actix_web=info");
-    env_logger::init();
+    // Set the default log level to info
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     tokio::select! {
         _ = proxy_service => {
-            println!("proxy service terminated");
+            log::info!("proxy service terminated with success");
         }
-        _ = http_service => {
-            println!("http service terminated");
+        result = http_service => {
+            match result {
+                Ok(_) => log::info!("http service terminated successfully"),
+                Err(e) => log::warn!("http service terminated with error: {}", e),
+            }
         }
-        _ = grpc_service => {
-            println!("grpc service terminated");
+        result = grpc_service => {
+            match result {
+                Ok(_) => log::info!("grpc service terminated successfully"),
+                Err(e) => log::warn!("grpc service terminated with error: {}", e),
+            }
         }
     }
 }
