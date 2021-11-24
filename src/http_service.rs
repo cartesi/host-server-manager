@@ -15,14 +15,13 @@ use actix_web::{
     HttpResponse, HttpServer, Responder,
 };
 use serde::{Deserialize, Serialize};
-use std::error::Error;
 
 use super::config::Config;
-use super::model::{Notice, Report, Voucher};
+use super::model::{FinishStatus, Notice, Report, Voucher};
 use super::proxy::{InsertError, ProxyChannel};
 
 /// Setup the HTTP server that receives requests from the DApp backend
-pub async fn run(config: &Config, proxy: ProxyChannel) -> Result<(), Box<dyn Error + Send + Sync>> {
+pub async fn run(config: &Config, proxy: ProxyChannel) -> std::io::Result<()> {
     HttpServer::new(move || {
         App::new()
             .app_data(Data::new(proxy.clone()))
@@ -32,7 +31,7 @@ pub async fn run(config: &Config, proxy: ProxyChannel) -> Result<(), Box<dyn Err
             .service(report)
             .service(finish)
     })
-    .bind((config.proxy_http_address, config.proxy_http_port))?
+    .bind((config.proxy_http_address.as_str(), config.proxy_http_port))?
     .run()
     .await
     .map_err(|e| e.into())
@@ -68,17 +67,15 @@ async fn report(report: Json<Report>, proxy: Data<ProxyChannel>) -> impl Respond
 
 #[actix_web::post("/report")]
 async fn finish(body: Json<FinishRequest>, proxy: Data<ProxyChannel>) -> impl Responder {
-    match body.status.as_str() {
-        "accept" => {
-            proxy.accept().await;
-            HttpResponse::Accepted()
+    let status = match body.status.as_str() {
+        "accept" => FinishStatus::Accept,
+        "reject" => FinishStatus::Reject,
+        _ => {
+            return HttpResponse::UnprocessableEntity().body("status must be 'accept' or 'reject'");
         }
-        "reject" => {
-            proxy.reject().await;
-            HttpResponse::Accepted()
-        }
-        _ => HttpResponse::UnprocessableEntity(),
-    }
+    };
+    proxy.finish(status).await;
+    HttpResponse::Accepted().finish()
 }
 
 #[derive(Deserialize)]

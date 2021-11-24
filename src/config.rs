@@ -11,19 +11,23 @@
 // specific language governing permissions and limitations under the License.
 
 pub struct Config {
-    pub proxy_http_address: &'static str,
+    pub grpc_machine_manager_address: String,
+    pub grpc_machine_manager_port: u16,
+    pub proxy_http_address: String,
     pub proxy_http_port: u16,
-    pub dapp_http_address: &'static str,
+    pub dapp_http_address: String,
     pub dapp_http_port: u16,
 }
 
 impl Config {
     pub fn new() -> Self {
         Self {
-            proxy_http_address: "127.0.0.1",
-            proxy_http_port: 5555,
-            dapp_http_address: "127.0.0.1",
-            dapp_http_port: 6666,
+            grpc_machine_manager_address: String::from("127.0.0.1"),
+            grpc_machine_manager_port: 5000,
+            proxy_http_address: String::from("127.0.0.1"),
+            proxy_http_port: 5001,
+            dapp_http_address: String::from("127.0.0.1"),
+            dapp_http_port: 5002,
         }
     }
 }

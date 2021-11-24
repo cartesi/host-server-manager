@@ -33,6 +33,12 @@ pub struct InspectRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FinishStatus {
+    Accept,
+    Reject,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Voucher {
     pub address: String,
     pub payload: String,
@@ -46,4 +52,18 @@ pub struct Notice {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Report {
     pub payload: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Identified<T> {
+    pub id: u64,
+    pub value: T,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Input {
+    pub status: FinishStatus,
+    pub vouchers: Vec<Identified<Voucher>>,
+    pub notices: Vec<Identified<Notice>>,
+    pub reports: Vec<Report>,
 }

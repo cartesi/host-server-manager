@@ -54,24 +54,20 @@ impl DApp for DAppClient {
 }
 
 #[derive(Debug)]
-pub enum DAppError {
-    StatusError {
-        expected: StatusCode,
-        obtained: StatusCode,
-    },
+pub struct DAppError {
+    expected: StatusCode,
+    obtained: StatusCode,
 }
 
 impl Error for DAppError {}
 
 impl fmt::Display for DAppError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            DAppError::StatusError { expected, obtained } => write!(
-                f,
-                "wrong status in http call; expected {} but got {}",
-                expected, obtained
-            ),
-        }
+        write!(
+            f,
+            "wrong status in http call; expected {} but got {}",
+            self.expected, self.obtained
+        )
     }
 }
 
@@ -80,7 +76,7 @@ fn check_status(
     obtained: StatusCode,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     if expected != obtained {
-        Err(Box::new(DAppError::StatusError { expected, obtained }))
+        Err(Box::new(DAppError { expected, obtained }))
     } else {
         Ok(())
     }

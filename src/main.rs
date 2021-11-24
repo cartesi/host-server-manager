@@ -14,27 +14,25 @@
 #![allow(dead_code)]
 
 mod config;
+mod conversions;
 mod dapp_client;
 mod grpc_proto;
 mod grpc_service;
 mod http_service;
 mod model;
 mod proxy;
-mod repository;
 
 use config::Config;
 use dapp_client::DAppClient;
-use repository::MemRepository;
 
 #[actix_web::main]
 async fn main() {
     let config = Config::new();
     let dapp_client = Box::new(DAppClient::new(&config));
-    let repository = Box::new(MemRepository::new());
-    let (proxy_channel, proxy_service) = proxy::new(repository, dapp_client);
+    let (proxy_channel, proxy_service) = proxy::new(dapp_client);
     let proxy_service = proxy_service.run();
     let http_service = http_service::run(&config, proxy_channel.clone());
-    let grpc_service = grpc_service::run(proxy_channel);
+    let grpc_service = grpc_service::run(&config, proxy_channel);
 
     // Set the default log level to info
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
