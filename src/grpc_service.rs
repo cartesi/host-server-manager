@@ -11,7 +11,8 @@
 // specific language governing permissions and limitations under the License.
 
 use async_trait::async_trait;
-use std::{collections::HashMap, sync::Arc};
+use futures_util::FutureExt;
+use std::{collections::HashMap, future::Future, sync::Arc};
 use tokio::sync::Mutex;
 use tonic::{transport::Server, Request, Response, Status};
 
@@ -32,7 +33,11 @@ use crate::grpc_proto::versioning::{GetVersionResponse, SemanticVersion};
 use crate::model::{AdvanceMetadata, AdvanceRequest, FinishStatus, Input};
 use crate::proxy::{AdvanceError, AdvanceFinisher, ProxyChannel};
 
-pub async fn run(config: &Config, proxy: ProxyChannel) -> Result<(), tonic::transport::Error> {
+pub async fn run<F: Future<Output = ()>>(
+    config: &Config,
+    proxy: ProxyChannel,
+    signal: F,
+) -> Result<(), tonic::transport::Error> {
     let addr = format!(
         "{}:{}",
         config.grpc_machine_manager_address, config.grpc_machine_manager_port
@@ -42,7 +47,7 @@ pub async fn run(config: &Config, proxy: ProxyChannel) -> Result<(), tonic::tran
     let service = RollupMachineManagerService::new(proxy);
     Server::builder()
         .add_service(RollupMachineManagerServer::new(service))
-        .serve(addr)
+        .serve_with_shutdown(addr, signal.map(|_| ()))
         .await
 }
 
@@ -53,7 +58,6 @@ struct RollupMachineManagerService {
 
 #[derive(Debug)]
 struct Session {
-    id: String,
     active_epoch_index: u64,
     epochs: HashMap<u64, Arc<Mutex<Epoch>>>,
     tainted: Arc<Mutex<Option<Status>>>,
@@ -61,7 +65,6 @@ struct Session {
 
 #[derive(Debug)]
 struct Epoch {
-    index: u64,
     state: EpochState,
     pending_inputs: u64,
     processed_inputs: Vec<Input>,
@@ -106,9 +109,8 @@ impl RollupMachineManager for RollupMachineManagerService {
                 }
                 None => {
                     *session_cell = Some((
-                        request.session_id.clone(),
+                        request.session_id,
                         Arc::new(Mutex::new(Session::new(
-                            request.session_id,
                             request.active_epoch_index,
                         ))),
                     ));
@@ -369,13 +371,12 @@ impl RollupMachineManagerService {
 }
 
 impl Session {
-    fn new(id: String, active_epoch_index: u64) -> Self {
+    fn new(active_epoch_index: u64) -> Self {
         Self {
-            id,
             active_epoch_index,
             epochs: HashMap::from([(
                 active_epoch_index,
-                Arc::new(Mutex::new(Epoch::new(active_epoch_index))),
+                Arc::new(Mutex::new(Epoch::new())),
             )]),
             tainted: Arc::new(Mutex::new(None)),
         }
@@ -425,15 +426,14 @@ impl Session {
         self.active_epoch_index += 1;
         self.epochs.insert(
             self.active_epoch_index,
-            Arc::new(Mutex::new(Epoch::new(self.active_epoch_index))),
+            Arc::new(Mutex::new(Epoch::new())),
         );
     }
 }
 
 impl Epoch {
-    fn new(index: u64) -> Self {
+    fn new() -> Self {
         Self {
-            index,
             state: EpochState::Active,
             pending_inputs: 0,
             processed_inputs: vec![],

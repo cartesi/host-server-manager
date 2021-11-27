@@ -34,7 +34,6 @@ pub async fn run(config: &Config, proxy: ProxyChannel) -> std::io::Result<()> {
     .bind((config.proxy_http_address.as_str(), config.proxy_http_port))?
     .run()
     .await
-    .map_err(|e| e.into())
 }
 
 #[actix_web::post("/voucher")]

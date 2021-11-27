@@ -10,9 +10,6 @@
 // CONDITIONS OF ANY KIND, either express or implied. See the License for the
 // specific language governing permissions and limitations under the License.
 
-// TODO remove the followin line
-#![allow(dead_code)]
-
 mod config;
 mod conversions;
 mod dapp_client;
@@ -22,36 +19,58 @@ mod http_service;
 mod model;
 mod proxy;
 
+use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc};
+use futures_util::FutureExt;
+use tokio::sync::oneshot;
+
 use config::Config;
 use dapp_client::DAppClient;
 
 #[actix_web::main]
 async fn main() {
-    let config = Config::new();
-    let dapp_client = Box::new(DAppClient::new(&config));
-    let (proxy_channel, proxy_service) = proxy::new(dapp_client);
-    let proxy_service = proxy_service.run();
-    let http_service = http_service::run(&config, proxy_channel.clone());
-    let grpc_service = grpc_service::run(&config, proxy_channel);
-
     // Set the default log level to info
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    tokio::select! {
-        _ = proxy_service => {
-            log::info!("proxy service terminated with success");
-        }
-        result = http_service => {
-            match result {
-                Ok(_) => log::info!("http service terminated successfully"),
-                Err(e) => log::warn!("http service terminated with error: {}", e),
-            }
-        }
-        result = grpc_service => {
-            match result {
+    let config = Config::new();
+    let dapp_client = Box::new(DAppClient::new(&config));
+    let (proxy_channel, proxy_service) = proxy::new(dapp_client);
+    let proxy_service = tokio::spawn(async {
+        proxy_service.run().await;
+        log::info!("proxy service terminated successfully");
+    });
+    let http_service_running = Arc::new(AtomicBool::new(true));
+    let (grpc_shutdown_tx, grpc_shutdown_rx) = oneshot::channel::<()>();
+    let grpc_service = {
+        let proxy_channel = proxy_channel.clone();
+        let config = config.clone();
+        let shutdown = grpc_shutdown_rx.map(|_| ());
+        let http_service_running = http_service_running.clone();
+        tokio::spawn(async move {
+            match grpc_service::run(&config, proxy_channel.clone(), shutdown).await {
                 Ok(_) => log::info!("grpc service terminated successfully"),
                 Err(e) => log::warn!("grpc service terminated with error: {}", e),
             }
-        }
+            if http_service_running.load(Ordering::Relaxed) {
+                panic!("gRPC service terminated before shutdown signal");
+            }
+        })
+    };
+
+    // We run the actix-web in the main thread because it handles the SIGINT
+    match http_service::run(&config, proxy_channel.clone()).await {
+        Ok(_) => log::info!("http service terminated successfully"),
+        Err(e) => log::warn!("http service terminated with error: {}", e),
     }
+    http_service_running.store(false, Ordering::Relaxed);
+    // Shutdown the other services
+    proxy_channel.shutdown().await;
+    proxy_service
+        .await
+        .expect("failed to shutdown the proxy service");
+    grpc_shutdown_tx
+        .send(())
+        .expect("failed to send shutdown signal to grpc");
+    grpc_service
+        .await
+        .expect("failed to shutdown the grpc service");
 }
