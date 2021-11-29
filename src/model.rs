@@ -33,6 +33,11 @@ pub struct InspectRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InspectResponse {
+    pub reports: Vec<Report>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FinishStatus {
     Accept,
     Reject,

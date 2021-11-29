@@ -10,6 +10,7 @@
 // CONDITIONS OF ANY KIND, either express or implied. See the License for the
 // specific language governing permissions and limitations under the License.
 
+mod inspect;
 mod target_proxy;
 
 use crate::config::Config;
@@ -17,5 +18,9 @@ use crate::proxy::ProxyChannel;
 
 /// Setup the HTTP server that receives requests from the DApp backend
 pub async fn start_services(config: &Config, proxy: ProxyChannel) -> std::io::Result<()> {
-    target_proxy::start_service(config, proxy).await
+    tokio::try_join!(
+        target_proxy::start_service(config, proxy.clone()),
+        inspect::start_service(config, proxy),
+    )
+    .map(|_| ())
 }

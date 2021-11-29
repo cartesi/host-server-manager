@@ -14,8 +14,10 @@
 pub struct Config {
     pub grpc_machine_manager_address: String,
     pub grpc_machine_manager_port: u16,
-    pub proxy_http_address: String,
-    pub proxy_http_port: u16,
+    pub http_target_proxy_address: String,
+    pub http_target_proxy_port: u16,
+    pub http_inspect_address: String,
+    pub http_inspect_port: u16,
     pub dapp_http_address: String,
     pub dapp_http_port: u16,
 }
@@ -25,10 +27,12 @@ impl Config {
         Self {
             grpc_machine_manager_address: String::from("127.0.0.1"),
             grpc_machine_manager_port: 5000,
-            proxy_http_address: String::from("127.0.0.1"),
-            proxy_http_port: 5001,
+            http_target_proxy_address: String::from("127.0.0.1"),
+            http_target_proxy_port: 5001,
+            http_inspect_address: String::from("127.0.0.1"),
+            http_inspect_port: 5002,
             dapp_http_address: String::from("127.0.0.1"),
-            dapp_http_port: 5002,
+            dapp_http_port: 5003,
         }
     }
 }

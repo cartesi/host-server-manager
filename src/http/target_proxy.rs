@@ -11,8 +11,8 @@
 // specific language governing permissions and limitations under the License.
 
 use actix_web::{
-middleware::Logger, HttpServer,
-    error::ResponseError, http::StatusCode, web::Data, web::Json, App, HttpResponse, Responder,
+    error::ResponseError, http::StatusCode, middleware::Logger, web::Data, web::Json, App,
+    HttpResponse, HttpServer, Responder,
 };
 use serde::{Deserialize, Serialize};
 
@@ -30,7 +30,10 @@ pub async fn start_service(config: &Config, proxy: ProxyChannel) -> std::io::Res
             .service(report)
             .service(finish)
     })
-    .bind((config.proxy_http_address.as_str(), config.proxy_http_port))?
+    .bind((
+        config.http_target_proxy_address.as_str(),
+        config.http_target_proxy_port,
+    ))?
     .run()
     .await
 }
