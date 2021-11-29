@@ -11,26 +11,25 @@
 // specific language governing permissions and limitations under the License.
 
 use async_trait::async_trait;
-use reqwest::{Client, StatusCode};
+use reqwest::{Client, Response, StatusCode};
 use std::{error::Error, fmt};
 
 use super::config::Config;
-use super::model::{AdvanceRequest, InspectRequest, Report};
+use super::model::{AdvanceRequest, InspectRequest, InspectResponse, Report};
 use super::proxy::DApp;
 
 /// HTTP client for the DApp backend
 pub struct DAppClient {
-    url: String,
+    address: String,
+    port: u16,
     client: Client,
 }
 
 impl DAppClient {
     pub fn new(config: &Config) -> Self {
         Self {
-            url: format!(
-                "http://{}:{}",
-                config.dapp_http_address, config.dapp_http_address
-            ),
+            address: config.dapp_http_address.clone(),
+            port: config.dapp_http_port,
             client: Client::new(),
         }
     }
@@ -39,17 +38,35 @@ impl DAppClient {
 #[async_trait]
 impl DApp for DAppClient {
     async fn advance(&self, request: AdvanceRequest) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let response = self.client.post(&self.url).json(&request).send().await?;
-        check_status(StatusCode::ACCEPTED, response.status())
+        self.client
+            .post(format!("http://{}:{}/advance", self.address, self.port))
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| e.into())
+            .and_then(check_status(StatusCode::ACCEPTED))
+            .map(|_| ())
     }
 
     async fn inspect(
         &self,
         request: InspectRequest,
     ) -> Result<Vec<Report>, Box<dyn Error + Send + Sync>> {
-        let response = self.client.get(&self.url).json(&request).send().await?;
-        check_status(StatusCode::OK, response.status())?;
-        Ok(response.json().await?)
+        let response = self
+            .client
+            .get(format!(
+                "http://{}:{}/inspect/{}",
+                self.address, self.port, request.payload
+            ))
+            .send()
+            .await
+            .map_err(|e| e.into())
+            .and_then(check_status(StatusCode::OK))?;
+        response
+            .json::<InspectResponse>()
+            .await
+            .map(|inspect_response| inspect_response.reports)
+            .map_err(|e| e.into())
     }
 }
 
@@ -73,11 +90,15 @@ impl fmt::Display for DAppError {
 
 fn check_status(
     expected: StatusCode,
-    obtained: StatusCode,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
-    if expected != obtained {
-        Err(Box::new(DAppError { expected, obtained }))
-    } else {
-        Ok(())
+) -> impl FnOnce(Response) -> Result<Response, Box<dyn Error + Send + Sync>> {
+    move |response| {
+        if expected != response.status() {
+            Err(Box::new(DAppError {
+                expected,
+                obtained: response.status(),
+            }))
+        } else {
+            Ok(response)
+        }
     }
 }
