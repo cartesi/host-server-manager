@@ -13,14 +13,13 @@
 mod config;
 mod conversions;
 mod dapp_client;
-mod grpc_proto;
-mod grpc_service;
-mod http_service;
+mod grpc;
+mod http;
 mod model;
 mod proxy;
 
-use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc};
 use futures_util::FutureExt;
+use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc};
 use tokio::sync::oneshot;
 
 use config::Config;
@@ -46,7 +45,7 @@ async fn main() {
         let shutdown = grpc_shutdown_rx.map(|_| ());
         let http_service_running = http_service_running.clone();
         tokio::spawn(async move {
-            match grpc_service::run(&config, proxy_channel.clone(), shutdown).await {
+            match grpc::start_service(&config, proxy_channel.clone(), shutdown).await {
                 Ok(_) => log::info!("grpc service terminated successfully"),
                 Err(e) => log::warn!("grpc service terminated with error: {}", e),
             }
@@ -57,11 +56,12 @@ async fn main() {
     };
 
     // We run the actix-web in the main thread because it handles the SIGINT
-    match http_service::run(&config, proxy_channel.clone()).await {
+    match http::start_services(&config, proxy_channel.clone()).await {
         Ok(_) => log::info!("http service terminated successfully"),
         Err(e) => log::warn!("http service terminated with error: {}", e),
     }
     http_service_running.store(false, Ordering::Relaxed);
+
     // Shutdown the other services
     proxy_channel.shutdown().await;
     proxy_service

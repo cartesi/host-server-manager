@@ -11,17 +11,16 @@
 // specific language governing permissions and limitations under the License.
 
 use actix_web::{
-    error::ResponseError, http::StatusCode, middleware::Logger, web::Data, web::Json, App,
-    HttpResponse, HttpServer, Responder,
+middleware::Logger, HttpServer,
+    error::ResponseError, http::StatusCode, web::Data, web::Json, App, HttpResponse, Responder,
 };
 use serde::{Deserialize, Serialize};
 
-use super::config::Config;
-use super::model::{FinishStatus, Notice, Report, Voucher};
-use super::proxy::{InsertError, ProxyChannel};
+use crate::config::Config;
+use crate::model::{FinishStatus, Notice, Report, Voucher};
+use crate::proxy::{InsertError, ProxyChannel};
 
-/// Setup the HTTP server that receives requests from the DApp backend
-pub async fn run(config: &Config, proxy: ProxyChannel) -> std::io::Result<()> {
+pub async fn start_service(config: &Config, proxy: ProxyChannel) -> std::io::Result<()> {
     HttpServer::new(move || {
         App::new()
             .app_data(Data::new(proxy.clone()))

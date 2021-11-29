@@ -11,47 +11,26 @@
 // specific language governing permissions and limitations under the License.
 
 use async_trait::async_trait;
-use futures_util::FutureExt;
-use std::{collections::HashMap, future::Future, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
-use tonic::{transport::Server, Request, Response, Status};
+use tonic::{Request, Response, Status};
 
-use crate::config::Config;
 use crate::conversions;
-use crate::grpc_proto::cartesi_machine::Void;
-use crate::grpc_proto::rollup_machine_manager::rollup_machine_manager_server::{
-    RollupMachineManager, RollupMachineManagerServer,
-};
-use crate::grpc_proto::rollup_machine_manager::{
+use crate::model::{AdvanceMetadata, AdvanceRequest, FinishStatus, Input};
+use crate::proxy::{AdvanceError, AdvanceFinisher, ProxyChannel};
+
+use super::proto::cartesi_machine::Void;
+use super::proto::rollup_machine_manager::rollup_machine_manager_server::RollupMachineManager;
+use super::proto::rollup_machine_manager::{
     processed_input::ProcessedOneof, Address, AdvanceStateRequest, CompletionStatus,
     EndSessionRequest, EpochState, FinishEpochRequest, GetEpochStatusRequest,
     GetEpochStatusResponse, GetSessionStatusRequest, GetSessionStatusResponse, GetStatusResponse,
     InputResult, InspectStateRequest, InspectStateResponse, Notice, ProcessedInput, Report,
     StartSessionRequest, TaintStatus, Voucher,
 };
-use crate::grpc_proto::versioning::{GetVersionResponse, SemanticVersion};
-use crate::model::{AdvanceMetadata, AdvanceRequest, FinishStatus, Input};
-use crate::proxy::{AdvanceError, AdvanceFinisher, ProxyChannel};
+use super::proto::versioning::{GetVersionResponse, SemanticVersion};
 
-pub async fn run<F: Future<Output = ()>>(
-    config: &Config,
-    proxy: ProxyChannel,
-    signal: F,
-) -> Result<(), tonic::transport::Error> {
-    let addr = format!(
-        "{}:{}",
-        config.grpc_machine_manager_address, config.grpc_machine_manager_port
-    )
-    .parse()
-    .expect("invalid config");
-    let service = RollupMachineManagerService::new(proxy);
-    Server::builder()
-        .add_service(RollupMachineManagerServer::new(service))
-        .serve_with_shutdown(addr, signal.map(|_| ()))
-        .await
-}
-
-struct RollupMachineManagerService {
+pub struct RollupMachineManagerService {
     proxy: ProxyChannel,
     session_cell: Mutex<Option<(String, Arc<Mutex<Session>>)>>, // it only supports one session
 }
@@ -110,9 +89,7 @@ impl RollupMachineManager for RollupMachineManagerService {
                 None => {
                     *session_cell = Some((
                         request.session_id,
-                        Arc::new(Mutex::new(Session::new(
-                            request.active_epoch_index,
-                        ))),
+                        Arc::new(Mutex::new(Session::new(request.active_epoch_index))),
                     ));
                     Ok(Response::new(Void {}))
                 }
@@ -308,7 +285,7 @@ impl RollupMachineManager for RollupMachineManagerService {
 }
 
 impl RollupMachineManagerService {
-    fn new(proxy: ProxyChannel) -> Self {
+    pub fn new(proxy: ProxyChannel) -> Self {
         Self {
             proxy,
             session_cell: Mutex::new(None),
@@ -374,10 +351,7 @@ impl Session {
     fn new(active_epoch_index: u64) -> Self {
         Self {
             active_epoch_index,
-            epochs: HashMap::from([(
-                active_epoch_index,
-                Arc::new(Mutex::new(Epoch::new())),
-            )]),
+            epochs: HashMap::from([(active_epoch_index, Arc::new(Mutex::new(Epoch::new())))]),
             tainted: Arc::new(Mutex::new(None)),
         }
     }
@@ -424,10 +398,8 @@ impl Session {
 
     fn start_new_epoch(&mut self) {
         self.active_epoch_index += 1;
-        self.epochs.insert(
-            self.active_epoch_index,
-            Arc::new(Mutex::new(Epoch::new())),
-        );
+        self.epochs
+            .insert(self.active_epoch_index, Arc::new(Mutex::new(Epoch::new())));
     }
 }
 
