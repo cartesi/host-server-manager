@@ -16,6 +16,7 @@ log = "0.4"
 prost = "0.9"
 reqwest = { version = "0.11", features = ["json"] }
 serde = "1.0"
+snafu = "0.6"
 tokio = { version = "1.14", features = ["macros", "time", "rt-multi-thread"] }
 tonic = "0.6"
 

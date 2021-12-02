@@ -14,6 +14,7 @@
 use mockall::{automock, predicate::*, Sequence};
 
 use async_trait::async_trait;
+use snafu::Snafu;
 use std::{error::Error, fmt};
 use tokio::sync::{mpsc, oneshot};
 
@@ -70,36 +71,20 @@ pub trait DApp: Send + Sync {
     ) -> Result<Vec<Report>, Box<dyn Error + Send + Sync>>;
 }
 
-/// Error when inserting a voucher or notice when the state is idle
-#[derive(Debug)]
-pub struct InsertError();
-impl Error for InsertError {}
-impl fmt::Display for InsertError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "request not accepted when state is idle")
-    }
+#[derive(Debug, Snafu)]
+#[snafu(display("request not accepted when state is idle"))]
+pub struct InsertError {}
+
+#[derive(Debug, Snafu)]
+#[snafu(display("failed to send inspect request to dapp: {}", e))]
+pub struct InspectError {
+    e: Box<dyn Error + Send + Sync>,
 }
 
-/// Error when fail to communicate with the DApp during inspect
-#[derive(Debug)]
-pub struct InspectError();
-impl Error for InspectError {}
-impl fmt::Display for InspectError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "failed to send inspect request to dapp")
-    }
-}
-
-/// Error when fail to communicate with the DApp during advance
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Snafu)]
+#[snafu(display("failed to send advance request to dapp: {}", e))]
 pub struct AdvanceError {
-    cause: String,
-}
-impl Error for AdvanceError {}
-impl fmt::Display for AdvanceError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "failed to send request to dapp ({})", self.cause)
-    }
+    e: Box<dyn Error + Send + Sync>,
 }
 
 /// Channel used to communicate with the Proxy
@@ -317,12 +302,7 @@ impl IdleState {
             }
             Err(e) => {
                 log::error!("failed to advance state with error: {}", e);
-                wrapper
-                    .finisher
-                    .handle(Err(AdvanceError {
-                        cause: e.to_string(),
-                    }))
-                    .await;
+                wrapper.finisher.handle(Err(AdvanceError { e })).await;
                 State::Idle(self)
             }
         }
@@ -332,7 +312,7 @@ impl IdleState {
         log::info!("processing inspect request");
         let response = self.dapp.inspect(request.value).await.map_err(|e| {
             log::error!("failed to inspect with error: {}", e);
-            InspectError()
+            InspectError { e }
         });
         request
             .response_tx
@@ -344,7 +324,7 @@ impl IdleState {
     fn reject_insert_request<T: Send + Sync>(request: SyncRequest<T, Result<u64, InsertError>>) {
         request
             .response_tx
-            .send(Err(InsertError()))
+            .send(Err(InsertError {}))
             .expect("send should not fail");
     }
 }
@@ -581,14 +561,14 @@ mod tests {
                 payload: String::from("notice 0"),
             })
             .await;
-        assert!(matches!(result, Err(InsertError())));
+        assert!(matches!(result, Err(InsertError {})));
         let result = proxy
             .insert_voucher(Voucher {
                 address: String::from("0x0001"),
                 payload: String::from("voucher 0"),
             })
             .await;
-        assert!(matches!(result, Err(InsertError())));
+        assert!(matches!(result, Err(InsertError {})));
         proxy.shutdown().await;
         service.await.unwrap();
     }
@@ -695,6 +675,13 @@ mod tests {
                 timestamp: 1635946561,
             },
             payload: String::from("0xdeadbeef"),
+        }
+    }
+
+    // This is required to use the eq predicate in the finisher mock
+    impl PartialEq for AdvanceError {
+        fn eq(&self, rhs: &Self) -> bool {
+            self.e.to_string() == rhs.e.to_string()
         }
     }
 }

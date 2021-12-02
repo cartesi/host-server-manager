@@ -10,17 +10,20 @@
 // CONDITIONS OF ANY KIND, either express or implied. See the License for the
 // specific language governing permissions and limitations under the License.
 
+use snafu::Snafu;
 use std::{fmt::Write, num::ParseIntError};
 
-#[derive(Debug)]
-pub struct ParseError();
-
-impl std::error::Error for ParseError {}
-
-impl std::fmt::Display for ParseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "error when parsing string")
-    }
+#[derive(Debug, Snafu)]
+pub enum DecodeError {
+    #[snafu(display("Failed to decode ethereum binary string {} (expected 0x prefix)", s))]
+    InvalidPrefix { s: String },
+    #[snafu(display(
+        "Failed to decode ethereum binary string {} (expected even number of chars)",
+        s
+    ))]
+    OddChars { s: String },
+    #[snafu(display("Failed to decode ethereum binary string {} ({})", s, e))]
+    ParseInt { s: String, e: ParseIntError },
 }
 
 /// Convert binary array to Ethereum binary format
@@ -34,19 +37,20 @@ pub fn encode_ethereum_binary(bytes: &[u8]) -> String {
 }
 
 /// Convert string in Ethereum binary format to binary array
-pub fn decode_ethereum_binary(s: &str) -> Result<Vec<u8>, ParseError> {
-    if !s.starts_with("0x") {
-        Err(ParseError())
-    } else {
-        (2..s.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&s[i..i + 2], 16))
-            .collect::<Result<Vec<u8>, ParseIntError>>()
-            .map_err(|_| {
-                log::error!("error when parsing Ethereum string ({})", s);
-                ParseError()
-            })
-    }
+pub fn decode_ethereum_binary(s: &str) -> Result<Vec<u8>, DecodeError> {
+    snafu::ensure!(s.starts_with("0x"), InvalidPrefix { s });
+    snafu::ensure!(s.len() % 2 == 0, OddChars { s });
+    (2..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16))
+        .collect::<Result<Vec<u8>, ParseIntError>>()
+        .map_err(|e| {
+            log::error!("error when parsing Ethereum string ({})", s);
+            DecodeError::ParseInt {
+                s: String::from(s),
+                e,
+            }
+        })
 }
 
 #[cfg(test)]
@@ -81,14 +85,28 @@ mod tests {
 
     #[test]
     fn test_decode_with_invalid_prefix() {
-        assert!(matches!(
-            decode_ethereum_binary("0X0120FF00"),
-            Err(ParseError())
-        ));
+        let err = decode_ethereum_binary("0X0120FF00").unwrap_err();
+        assert_eq!(
+            err.to_string().as_str(),
+            "Failed to decode ethereum binary string 0X0120FF00 (expected 0x prefix)",
+        );
     }
 
     #[test]
     fn test_decode_with_invalid_number() {
-        assert!(matches!(decode_ethereum_binary("0xZZ"), Err(ParseError())));
+        let err = decode_ethereum_binary("0xZZ").unwrap_err();
+        assert_eq!(
+            err.to_string().as_str(),
+            "Failed to decode ethereum binary string 0xZZ (invalid digit found in string)"
+        );
+    }
+
+    #[test]
+    fn test_decode_with_odd_number_of_chars() {
+        let err = decode_ethereum_binary("0xA").unwrap_err();
+        assert_eq!(
+            err.to_string().as_str(),
+            "Failed to decode ethereum binary string 0xA (expected even number of chars)"
+        );
     }
 }

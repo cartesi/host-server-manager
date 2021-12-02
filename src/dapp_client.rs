@@ -12,7 +12,8 @@
 
 use async_trait::async_trait;
 use reqwest::{Client, Response, StatusCode};
-use std::{error::Error, fmt};
+use snafu::Snafu;
+use std::error::Error;
 
 use super::config::Config;
 use super::model::{AdvanceRequest, InspectRequest, InspectResponse, Report};
@@ -70,22 +71,15 @@ impl DApp for DAppClient {
     }
 }
 
-#[derive(Debug)]
-pub struct DAppError {
+#[derive(Debug, Snafu)]
+#[snafu(display(
+    "wrong status in HTTP call (expected {} but got {})",
+    expected,
+    obtained
+))]
+pub struct UnexpectedStatusError {
     expected: StatusCode,
     obtained: StatusCode,
-}
-
-impl Error for DAppError {}
-
-impl fmt::Display for DAppError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "wrong status in http call; expected {} but got {}",
-            self.expected, self.obtained
-        )
-    }
 }
 
 fn check_status(
@@ -93,7 +87,7 @@ fn check_status(
 ) -> impl FnOnce(Response) -> Result<Response, Box<dyn Error + Send + Sync>> {
     move |response| {
         if expected != response.status() {
-            Err(Box::new(DAppError {
+            Err(Box::new(UnexpectedStatusError {
                 expected,
                 obtained: response.status(),
             }))
