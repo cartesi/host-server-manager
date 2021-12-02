@@ -159,8 +159,8 @@ impl ProxyChannel {
     }
 
     async fn make_sync_request<
-        T: std::fmt::Debug + Send + Sync + 'static,
-        U: std::fmt::Debug + Send + Sync + 'static,
+        T: std::fmt::Debug + Send + Sync,
+        U: std::fmt::Debug + Send + Sync,
     >(
         value: T,
         tx: &mpsc::Sender<SyncRequest<T, U>>,
