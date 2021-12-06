@@ -9,6 +9,14 @@ This project also simulates the Inspect API provided by the Inspect Container.
 This project requires Rust.
 To install Rust follow the instructions [here](https://www.rust-lang.org/tools/install).
 
+## Depencies
+
+Before building and running the project, you should download the submoules with:
+
+```
+git submodule update --init --recursive
+```
+
 ## Running
 
 To run the mock, execute the command:
