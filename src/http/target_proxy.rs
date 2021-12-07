@@ -66,7 +66,7 @@ async fn report(report: Json<Report>, proxy: Data<ProxyChannel>) -> impl Respond
     HttpResponse::Accepted()
 }
 
-#[actix_web::post("/report")]
+#[actix_web::post("/finish")]
 async fn finish(body: Json<FinishRequest>, proxy: Data<ProxyChannel>) -> impl Responder {
     let status = match body.status.as_str() {
         "accept" => FinishStatus::Accept,
