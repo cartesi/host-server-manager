@@ -10,44 +10,42 @@
 // CONDITIONS OF ANY KIND, either express or implied. See the License for the
 // specific language governing permissions and limitations under the License.
 
-use std::env;
+use structopt::StructOpt;
 
-#[derive(Clone)]
+const DEFAULT_ADDRESS: &str = "0.0.0.0";
+
+#[derive(StructOpt, Clone, Debug)]
+#[structopt(name = "mock-rollups-machine-manager")]
 pub struct Config {
+    /// gRPC address of the Mock Rollups Machine Manager endpoint
+    #[structopt(long, env, default_value = DEFAULT_ADDRESS)]
     pub grpc_machine_manager_address: String,
+
+    /// gRPC port of the Mock Rollups Machine Manager endpoint
+    #[structopt(long, env, default_value = "5000")]
     pub grpc_machine_manager_port: u16,
+
+    /// HTTP address of the Target Proxy endpoint
+    #[structopt(long, env, default_value = DEFAULT_ADDRESS)]
     pub http_target_proxy_address: String,
+
+    /// HTTP port of the Target Proxy endpoint
+    #[structopt(long, env, default_value = "5001")]
     pub http_target_proxy_port: u16,
+
+    /// HTTP address of the Inspect endpoint
+    #[structopt(long, env, default_value = DEFAULT_ADDRESS)]
     pub http_inspect_address: String,
+
+    /// HTTP port of the Inspect endpoint
+    #[structopt(long, env, default_value = "5002")]
     pub http_inspect_port: u16,
+
+    /// HTTP address of the DApp backend
+    #[structopt(long, env, default_value = DEFAULT_ADDRESS)]
     pub dapp_http_address: String,
+
+    /// HTTP port of the DApp backend
+    #[structopt(long, env, default_value = "5003")]
     pub dapp_http_port: u16,
-}
-
-impl Config {
-    pub fn new() -> Self {
-        Self {
-            grpc_machine_manager_address: get_address("CARTESI_GRPC_MACHINE_MANAGER_ADDRESS"),
-            grpc_machine_manager_port: get_port("CARTESI_GRPC_MACHINE_MANAGER_PORT", 5000),
-            http_target_proxy_address: get_address("CARTESI_HTTP_TARGET_PROXY_ADDRESS"),
-            http_target_proxy_port: get_port("CARTESI_HTTP_TARGET_PROXY_PORT", 5001),
-            http_inspect_address: get_address("CARTESI_HTTP_INSPECT_ADDRESS"),
-            http_inspect_port: get_port("CARTESI_HTTP_INSPECT_PORT", 5002),
-            dapp_http_address: get_address("CARTESI_DAPP_HTTP_ADDRESS"),
-            dapp_http_port: get_port("CARTESI_DAPP_HTTP_PORT", 5003),
-        }
-    }
-}
-
-fn get_address(var: &str) -> String {
-    env::var(var).unwrap_or(String::from("127.0.0.1"))
-}
-
-fn get_port(var: &str, default: u16) -> u16 {
-    env::var(var)
-        .map(|s| {
-            s.parse::<u16>()
-                .expect(format!("failed to parse variable {}", var).as_str())
-        })
-        .unwrap_or(default)
 }

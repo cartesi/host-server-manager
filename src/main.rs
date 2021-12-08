@@ -20,6 +20,7 @@ mod proxy;
 
 use futures_util::FutureExt;
 use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc};
+use structopt::StructOpt;
 use tokio::sync::oneshot;
 
 use config::Config;
@@ -30,7 +31,9 @@ async fn main() {
     // Set the default log level to info
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    let config = Config::new();
+    let config = Config::from_args();
+    log::info!("{:#?}", config);
+
     let dapp_client = Box::new(DAppClient::new(&config));
     let (proxy_channel, proxy_service) = proxy::new(dapp_client);
     let proxy_service = tokio::spawn(async {
