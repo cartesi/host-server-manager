@@ -22,9 +22,8 @@ use crate::model::{
     AdvanceRequest, FinishStatus, Identified, Input, InspectRequest, Notice, Report, Voucher,
 };
 
-/// Create the proxy service and the proxy channel.
-/// The service should be ran in the background and the channel can be used to communicate with it.
-pub fn new(dapp: Box<dyn DApp>) -> (ProxyChannel, ProxyService) {
+/// Create the controller and its background service
+pub fn new(dapp: Box<dyn DApp>) -> (Controller, ControllerService) {
     let (advance_tx, advance_rx) = mpsc::channel::<AdvanceRequestWrapper>(1000);
     let (inspect_tx, inspect_rx) = mpsc::channel::<SyncInspectRequest>(1000);
     let (voucher_tx, voucher_rx) = mpsc::channel::<SyncVoucherRequest>(1000);
@@ -33,7 +32,7 @@ pub fn new(dapp: Box<dyn DApp>) -> (ProxyChannel, ProxyService) {
     let (finish_tx, finish_rx) = mpsc::channel::<FinishStatus>(1000);
     let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>(1000);
 
-    let channel = ProxyChannel {
+    let controller = Controller {
         advance_tx,
         inspect_tx,
         voucher_tx,
@@ -43,7 +42,7 @@ pub fn new(dapp: Box<dyn DApp>) -> (ProxyChannel, ProxyService) {
         shutdown_tx,
     };
 
-    let service = ProxyService {
+    let service = ControllerService {
         state: IdleState::new(dapp, 0),
         advance_rx,
         inspect_rx,
@@ -54,7 +53,7 @@ pub fn new(dapp: Box<dyn DApp>) -> (ProxyChannel, ProxyService) {
         shutdown_rx,
     };
 
-    (channel, service)
+    (controller, service)
 }
 
 /// Channel used to communicate with the DApp
@@ -87,9 +86,12 @@ pub struct AdvanceError {
     e: Box<dyn Error + Send + Sync>,
 }
 
-/// Channel used to communicate with the Proxy
+/// State-machine that controls whether the Mock is processing an input (advancing the rollups
+/// epoch state) or idle.
+/// When processing an input, the Mock receives vouchers, notices, and reports until it receives a
+/// finish request.
 #[derive(Clone)]
-pub struct ProxyChannel {
+pub struct Controller {
     advance_tx: mpsc::Sender<AdvanceRequestWrapper>,
     inspect_tx: mpsc::Sender<SyncInspectRequest>,
     voucher_tx: mpsc::Sender<SyncVoucherRequest>,
@@ -108,7 +110,7 @@ pub trait AdvanceFinisher: fmt::Debug + Send + Sync {
     async fn handle(&self, result: Result<Input, AdvanceError>);
 }
 
-impl ProxyChannel {
+impl Controller {
     /// Send an advance request
     /// The request will run in the background and the callback will be called when it is finished.
     pub async fn advance(&self, request: AdvanceRequest, finisher: Box<dyn AdvanceFinisher>) {
@@ -174,7 +176,7 @@ impl ProxyChannel {
 }
 
 /// Service that processes the requests and should be ran in the background
-pub struct ProxyService {
+pub struct ControllerService {
     state: State,
     advance_rx: mpsc::Receiver<AdvanceRequestWrapper>,
     inspect_rx: mpsc::Receiver<SyncInspectRequest>,
@@ -185,7 +187,7 @@ pub struct ProxyService {
     shutdown_rx: mpsc::Receiver<()>,
 }
 
-impl ProxyService {
+impl ControllerService {
     pub async fn run(mut self) {
         loop {
             self.state = match self.state {
@@ -419,15 +421,15 @@ mod tests {
                     Ok(())
                 });
         }
-        let (proxy, service) = new(dapp);
+        let (controller, service) = new(dapp);
         let service = tokio::spawn(service.run());
 
-        proxy
+        controller
             .advance(request, mock_finisher(FinishStatus::Accept))
             .await;
         notify.notified().await;
-        proxy.finish(FinishStatus::Accept).await;
-        proxy.shutdown().await;
+        controller.finish(FinishStatus::Accept).await;
+        controller.shutdown().await;
         service.await.unwrap();
     }
 
@@ -452,12 +454,12 @@ mod tests {
                 .with(eq(request.clone()))
                 .return_once(move |_| Ok(response));
         }
-        let (proxy, service) = new(dapp);
+        let (controller, service) = new(dapp);
         let service = tokio::spawn(service.run());
 
-        let got = proxy.inspect(request).await.unwrap();
+        let got = controller.inspect(request).await.unwrap();
         assert!(got == expected);
-        proxy.shutdown().await;
+        controller.shutdown().await;
         service.await.unwrap();
     }
 
@@ -482,17 +484,17 @@ mod tests {
                     Ok(())
                 });
         }
-        let (proxy, service) = new(dapp);
+        let (controller, service) = new(dapp);
         let service = tokio::spawn(service.run());
 
         for notify in notifies {
-            proxy
+            controller
                 .advance(request.clone(), mock_finisher(FinishStatus::Accept))
                 .await;
             notify.notified().await;
-            proxy.finish(FinishStatus::Accept).await;
+            controller.finish(FinishStatus::Accept).await;
         }
-        proxy.shutdown().await;
+        controller.shutdown().await;
         service.await.unwrap();
     }
 
@@ -527,49 +529,49 @@ mod tests {
                     Ok(())
                 });
         }
-        let (proxy, service) = new(dapp);
+        let (controller, service) = new(dapp);
         let service = tokio::spawn(service.run());
 
-        proxy
+        controller
             .advance(advance_request.clone(), mock_finisher(FinishStatus::Accept))
             .await;
         advance_notify[0].notified().await;
         // Send both an advance and an inspect while processing the first advance
-        proxy
+        controller
             .advance(advance_request, mock_finisher(FinishStatus::Accept))
             .await;
         let inspect_handle = {
-            let proxy = proxy.clone();
-            tokio::spawn(async move { proxy.inspect(inspect_request).await.unwrap() })
+            let controller = controller.clone();
+            tokio::spawn(async move { controller.inspect(inspect_request).await.unwrap() })
         };
-        proxy.finish(FinishStatus::Accept).await; // Accept the first advance
+        controller.finish(FinishStatus::Accept).await; // Accept the first advance
         inspect_handle.await.unwrap(); // Wait for the inspect to finish first
         advance_notify[1].notified().await; // Then wait for the second advance
-        proxy.finish(FinishStatus::Accept).await; // Finally, accept the second advance
-        proxy.shutdown().await;
+        controller.finish(FinishStatus::Accept).await; // Finally, accept the second advance
+        controller.shutdown().await;
         service.await.unwrap();
     }
 
     #[tokio::test]
     async fn test_it_rejects_vouchers_and_notices_when_idle() {
         let dapp = Box::new(MockDApp::new());
-        let (proxy, service) = new(dapp);
+        let (controller, service) = new(dapp);
         let service = tokio::spawn(service.run());
 
-        let result = proxy
+        let result = controller
             .insert_notice(Notice {
                 payload: String::from("notice 0"),
             })
             .await;
         assert!(matches!(result, Err(InsertError {})));
-        let result = proxy
+        let result = controller
             .insert_voucher(Voucher {
                 address: String::from("0x0001"),
                 payload: String::from("voucher 0"),
             })
             .await;
         assert!(matches!(result, Err(InsertError {})));
-        proxy.shutdown().await;
+        controller.shutdown().await;
         service.await.unwrap();
     }
 
@@ -627,22 +629,28 @@ mod tests {
                 Ok(())
             });
         }
-        let (proxy, service) = new(dapp);
+        let (controller, service) = new(dapp);
         let service = tokio::spawn(service.run());
 
-        proxy.advance(request, finisher).await;
+        controller.advance(request, finisher).await;
         notify.notified().await;
         for voucher in input.vouchers {
-            proxy.insert_voucher(voucher.value.clone()).await.unwrap();
+            controller
+                .insert_voucher(voucher.value.clone())
+                .await
+                .unwrap();
         }
         for notice in input.notices {
-            proxy.insert_notice(notice.value.clone()).await.unwrap();
+            controller
+                .insert_notice(notice.value.clone())
+                .await
+                .unwrap();
         }
         for report in input.reports {
-            proxy.insert_report(report).await;
+            controller.insert_report(report).await;
         }
-        proxy.finish(FinishStatus::Reject).await;
-        proxy.shutdown().await;
+        controller.finish(FinishStatus::Reject).await;
+        controller.shutdown().await;
         service.await.unwrap();
     }
 

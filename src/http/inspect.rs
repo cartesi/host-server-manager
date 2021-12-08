@@ -16,13 +16,13 @@ use actix_web::{
 };
 
 use crate::config::Config;
+use crate::controller::{Controller, InspectError};
 use crate::model::{InspectRequest, InspectResponse};
-use crate::proxy::{InspectError, ProxyChannel};
 
-pub async fn start_service(config: &Config, proxy: ProxyChannel) -> std::io::Result<()> {
+pub async fn start_service(config: &Config, controller: Controller) -> std::io::Result<()> {
     HttpServer::new(move || {
         App::new()
-            .app_data(Data::new(proxy.clone()))
+            .app_data(Data::new(controller.clone()))
             .wrap(Logger::default())
             .service(inspect)
     })
@@ -35,8 +35,8 @@ pub async fn start_service(config: &Config, proxy: ProxyChannel) -> std::io::Res
 }
 
 #[actix_web::get("/inspect/{payload}")]
-async fn inspect(payload: String, proxy: Data<ProxyChannel>) -> impl Responder {
-    proxy
+async fn inspect(payload: String, controller: Data<Controller>) -> impl Responder {
+    controller
         .inspect(InspectRequest { payload })
         .await
         .map(|reports| HttpResponse::Ok().json(InspectResponse { reports }))

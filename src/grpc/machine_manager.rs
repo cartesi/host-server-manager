@@ -15,9 +15,9 @@ use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
 
+use crate::controller::{AdvanceError, AdvanceFinisher, Controller};
 use crate::conversions;
 use crate::model::{AdvanceMetadata, AdvanceRequest, FinishStatus, Input};
-use crate::proxy::{AdvanceError, AdvanceFinisher, ProxyChannel};
 
 use super::proto::cartesi_machine::Void;
 use super::proto::rollup_machine_manager::rollup_machine_manager_server::RollupMachineManager;
@@ -31,7 +31,7 @@ use super::proto::rollup_machine_manager::{
 use super::proto::versioning::{GetVersionResponse, SemanticVersion};
 
 pub struct RollupMachineManagerService {
-    proxy: ProxyChannel,
+    controller: Controller,
     session_cell: Mutex<Option<(String, Arc<Mutex<Session>>)>>, // it only supports one session
 }
 
@@ -160,7 +160,7 @@ impl RollupMachineManager for RollupMachineManagerService {
             epoch.add_pending_input();
         }
         let finisher = Box::new(Finisher::new(epoch_mutex.clone(), session.tainted.clone()));
-        self.proxy.advance(advance_request, finisher).await;
+        self.controller.advance(advance_request, finisher).await;
         Ok(Response::new(Void {}))
     }
 
@@ -285,9 +285,9 @@ impl RollupMachineManager for RollupMachineManagerService {
 }
 
 impl RollupMachineManagerService {
-    pub fn new(proxy: ProxyChannel) -> Self {
+    pub fn new(controller: Controller) -> Self {
         Self {
-            proxy,
+            controller,
             session_cell: Mutex::new(None),
         }
     }

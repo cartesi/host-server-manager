@@ -17,13 +17,13 @@ use actix_web::{
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
+use crate::controller::{Controller, InsertError};
 use crate::model::{FinishStatus, Notice, Report, Voucher};
-use crate::proxy::{InsertError, ProxyChannel};
 
-pub async fn start_service(config: &Config, proxy: ProxyChannel) -> std::io::Result<()> {
+pub async fn start_service(config: &Config, controller: Controller) -> std::io::Result<()> {
     HttpServer::new(move || {
         App::new()
-            .app_data(Data::new(proxy.clone()))
+            .app_data(Data::new(controller.clone()))
             .wrap(Logger::default())
             .service(voucher)
             .service(notice)
@@ -41,9 +41,9 @@ pub async fn start_service(config: &Config, proxy: ProxyChannel) -> std::io::Res
 #[actix_web::post("/voucher")]
 async fn voucher(
     voucher: Json<Voucher>,
-    proxy: Data<ProxyChannel>,
+    controller: Data<Controller>,
 ) -> Result<impl Responder, InsertError> {
-    proxy
+    controller
         .insert_voucher(voucher.0)
         .await
         .map(|id| HttpResponse::Created().json(IdResponse { id }))
@@ -52,22 +52,22 @@ async fn voucher(
 #[actix_web::post("/notice")]
 async fn notice(
     notice: Json<Notice>,
-    proxy: Data<ProxyChannel>,
+    controller: Data<Controller>,
 ) -> Result<impl Responder, InsertError> {
-    proxy
+    controller
         .insert_notice(notice.0)
         .await
         .map(|id| HttpResponse::Created().json(IdResponse { id }))
 }
 
 #[actix_web::post("/report")]
-async fn report(report: Json<Report>, proxy: Data<ProxyChannel>) -> impl Responder {
-    proxy.insert_report(report.0).await;
+async fn report(report: Json<Report>, controller: Data<Controller>) -> impl Responder {
+    controller.insert_report(report.0).await;
     HttpResponse::Accepted()
 }
 
 #[actix_web::post("/finish")]
-async fn finish(body: Json<FinishRequest>, proxy: Data<ProxyChannel>) -> impl Responder {
+async fn finish(body: Json<FinishRequest>, controller: Data<Controller>) -> impl Responder {
     let status = match body.status.as_str() {
         "accept" => FinishStatus::Accept,
         "reject" => FinishStatus::Reject,
@@ -75,7 +75,7 @@ async fn finish(body: Json<FinishRequest>, proxy: Data<ProxyChannel>) -> impl Re
             return HttpResponse::UnprocessableEntity().body("status must be 'accept' or 'reject'");
         }
     };
-    proxy.finish(status).await;
+    controller.finish(status).await;
     HttpResponse::Accepted().finish()
 }
 

@@ -21,11 +21,11 @@ use machine_manager::RollupMachineManagerService;
 use proto::rollup_machine_manager::rollup_machine_manager_server::RollupMachineManagerServer;
 
 use crate::config::Config;
-use crate::proxy::ProxyChannel;
+use crate::controller::Controller;
 
 pub async fn start_service<F: Future<Output = ()>>(
     config: &Config,
-    proxy: ProxyChannel,
+    controller: Controller,
     signal: F,
 ) -> Result<(), tonic::transport::Error> {
     let addr = format!(
@@ -34,7 +34,7 @@ pub async fn start_service<F: Future<Output = ()>>(
     )
     .parse()
     .expect("invalid config");
-    let service = RollupMachineManagerService::new(proxy);
+    let service = RollupMachineManagerService::new(controller);
     Server::builder()
         .add_service(RollupMachineManagerServer::new(service))
         .serve_with_shutdown(addr, signal.map(|_| ()))

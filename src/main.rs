@@ -11,12 +11,12 @@
 // specific language governing permissions and limitations under the License.
 
 mod config;
+mod controller;
 mod conversions;
 mod dapp_client;
 mod grpc;
 mod http;
 mod model;
-mod proxy;
 
 use futures_util::FutureExt;
 use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc};
@@ -35,20 +35,20 @@ async fn main() {
     log::info!("{:#?}", config);
 
     let dapp_client = Box::new(DAppClient::new(&config));
-    let (proxy_channel, proxy_service) = proxy::new(dapp_client);
-    let proxy_service = tokio::spawn(async {
-        proxy_service.run().await;
-        log::info!("proxy service terminated successfully");
+    let (controller, controller_service) = controller::new(dapp_client);
+    let controller_service = tokio::spawn(async {
+        controller_service.run().await;
+        log::info!("controller service terminated successfully");
     });
     let http_service_running = Arc::new(AtomicBool::new(true));
     let (grpc_shutdown_tx, grpc_shutdown_rx) = oneshot::channel::<()>();
     let grpc_service = {
-        let proxy_channel = proxy_channel.clone();
+        let controller = controller.clone();
         let config = config.clone();
         let shutdown = grpc_shutdown_rx.map(|_| ());
         let http_service_running = http_service_running.clone();
         tokio::spawn(async move {
-            match grpc::start_service(&config, proxy_channel.clone(), shutdown).await {
+            match grpc::start_service(&config, controller.clone(), shutdown).await {
                 Ok(_) => log::info!("grpc service terminated successfully"),
                 Err(e) => log::warn!("grpc service terminated with error: {}", e),
             }
@@ -59,17 +59,17 @@ async fn main() {
     };
 
     // We run the actix-web in the main thread because it handles the SIGINT
-    match http::start_services(&config, proxy_channel.clone()).await {
+    match http::start_services(&config, controller.clone()).await {
         Ok(_) => log::info!("http service terminated successfully"),
         Err(e) => log::warn!("http service terminated with error: {}", e),
     }
     http_service_running.store(false, Ordering::Relaxed);
 
     // Shutdown the other services
-    proxy_channel.shutdown().await;
-    proxy_service
+    controller.shutdown().await;
+    controller_service
         .await
-        .expect("failed to shutdown the proxy service");
+        .expect("failed to shutdown the controller service");
     grpc_shutdown_tx
         .send(())
         .expect("failed to send shutdown signal to grpc");

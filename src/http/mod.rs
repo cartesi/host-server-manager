@@ -14,13 +14,13 @@ mod inspect;
 mod target_proxy;
 
 use crate::config::Config;
-use crate::proxy::ProxyChannel;
+use crate::controller::Controller;
 
 /// Setup the HTTP server that receives requests from the DApp backend
-pub async fn start_services(config: &Config, proxy: ProxyChannel) -> std::io::Result<()> {
+pub async fn start_services(config: &Config, controller: Controller) -> std::io::Result<()> {
     tokio::try_join!(
-        target_proxy::start_service(config, proxy.clone()),
-        inspect::start_service(config, proxy),
+        target_proxy::start_service(config, controller.clone()),
+        inspect::start_service(config, controller),
     )
     .map(|_| ())
 }

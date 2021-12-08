@@ -16,8 +16,8 @@ use snafu::Snafu;
 use std::error::Error;
 
 use super::config::Config;
+use super::controller::DApp;
 use super::model::{AdvanceRequest, InspectRequest, InspectResponse, Report};
-use super::proxy::DApp;
 
 /// HTTP client for the DApp backend
 pub struct DAppClient {
