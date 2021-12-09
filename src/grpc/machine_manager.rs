@@ -17,7 +17,7 @@ use tonic::{Request, Response, Status};
 
 use crate::controller::{AdvanceError, AdvanceFinisher, Controller};
 use crate::conversions;
-use crate::model::{AdvanceMetadata, AdvanceRequest, FinishStatus, Input};
+use crate::model::{AdvanceMetadata, AdvanceRequest, FinishStatus, Input, Notice, Report, Voucher};
 
 use super::proto::cartesi_machine::Void;
 use super::proto::rollup_machine_manager::rollup_machine_manager_server::RollupMachineManager;
@@ -25,34 +25,23 @@ use super::proto::rollup_machine_manager::{
     processed_input::ProcessedOneof, Address, AdvanceStateRequest, CompletionStatus,
     EndSessionRequest, EpochState, FinishEpochRequest, GetEpochStatusRequest,
     GetEpochStatusResponse, GetSessionStatusRequest, GetSessionStatusResponse, GetStatusResponse,
-    InputResult, InspectStateRequest, InspectStateResponse, Notice, ProcessedInput, Report,
-    StartSessionRequest, TaintStatus, Voucher,
+    InputResult, InspectStateRequest, InspectStateResponse, Notice as GrpcNotice, ProcessedInput,
+    Report as GrpcReport, StartSessionRequest, TaintStatus, Voucher as GrpcVoucher,
 };
 use super::proto::versioning::{GetVersionResponse, SemanticVersion};
 
 pub struct RollupMachineManagerService {
     controller: Controller,
-    session_cell: Mutex<Option<(String, Arc<Mutex<Session>>)>>, // it only supports one session
+    sessions: SessionManager,
 }
 
-#[derive(Debug)]
-struct Session {
-    active_epoch_index: u64,
-    epochs: HashMap<u64, Arc<Mutex<Epoch>>>,
-    tainted: Arc<Mutex<Option<Status>>>,
-}
-
-#[derive(Debug)]
-struct Epoch {
-    state: EpochState,
-    pending_inputs: u64,
-    processed_inputs: Vec<Input>,
-}
-
-#[derive(Debug)]
-struct Finisher {
-    epoch: Arc<Mutex<Epoch>>,
-    tainted: Arc<Mutex<Option<Status>>>,
+impl RollupMachineManagerService {
+    pub fn new(controller: Controller) -> Self {
+        Self {
+            controller,
+            sessions: SessionManager::new(),
+        }
+    }
 }
 
 #[tonic::async_trait]
@@ -77,24 +66,14 @@ impl RollupMachineManager for RollupMachineManagerService {
     ) -> Result<Response<Void>, Status> {
         let request = request.into_inner();
         log::info!("received start_session with id={}", request.session_id);
-        if request.session_id == "" {
-            Err(Status::invalid_argument("session id is empty"))
-        } else {
-            let mut session_cell = self.session_cell.lock().await;
-            match *session_cell {
-                Some(_) => {
-                    log::warn!("the mock only supports a single session");
-                    Err(Status::already_exists("session id is taken"))
-                }
-                None => {
-                    *session_cell = Some((
-                        request.session_id,
-                        Arc::new(Mutex::new(Session::new(request.active_epoch_index))),
-                    ));
-                    Ok(Response::new(Void {}))
-                }
-            }
-        }
+        self.sessions
+            .try_set_session(
+                request.session_id,
+                request.active_epoch_index,
+                self.controller.clone(),
+            )
+            .await?;
+        Ok(Response::new(Void {}))
     }
 
     async fn end_session(
@@ -103,22 +82,7 @@ impl RollupMachineManager for RollupMachineManagerService {
     ) -> Result<Response<Void>, Status> {
         let request = request.into_inner();
         log::info!("received end_session with id={}", request.session_id);
-        let session_mutex = self.get_session(&request.session_id).await?;
-        let session = session_mutex
-            .try_lock()
-            .or(Err(Status::aborted("concurrent call in session")))?;
-        // If the session is not tainted, we should check if the active epoch is empty
-        if session.tainted.lock().await.is_none() {
-            let active_epoch_index = session.active_epoch_index;
-            session
-                .get_active_epoch(active_epoch_index)?
-                .lock()
-                .await
-                .check_pending_inputs()?
-                .check_processed_inputs(0)?;
-        }
-        let mut session_cell = self.session_cell.lock().await;
-        *session_cell = None;
+        self.sessions.try_del_session(&request.session_id).await?;
         Ok(Response::new(Void {}))
     }
 
@@ -144,23 +108,17 @@ impl RollupMachineManager for RollupMachineManagerService {
             },
             payload: conversions::encode_ethereum_binary(&request.input_payload),
         };
-        let session_mutex = self.get_session(&request.session_id).await?;
-        let session = session_mutex
-            .try_lock()
-            .or(Err(Status::aborted("concurrent call in session")))?;
-        let epoch_mutex = session
-            .check_status()
+        self.sessions
+            .try_get_session(&request.session_id)
             .await?
-            .get_active_epoch(request.active_epoch_index)?;
-        {
-            let mut epoch = epoch_mutex.lock().await;
-            epoch
-                .check_active()?
-                .check_current_input_index(request.current_input_index)?;
-            epoch.add_pending_input();
-        }
-        let finisher = Box::new(Finisher::new(epoch_mutex.clone(), session.tainted.clone()));
-        self.controller.advance(advance_request, finisher).await;
+            .try_lock()
+            .or(Err(Status::aborted("concurrent call in session")))?
+            .try_advance(
+                request.active_epoch_index,
+                request.current_input_index,
+                advance_request,
+            )
+            .await?;
         Ok(Response::new(Void {}))
     }
 
@@ -173,23 +131,13 @@ impl RollupMachineManager for RollupMachineManagerService {
         if request.storage_directory != "" {
             log::warn!("ignoring storage_directory parameter");
         }
-        let session_mutex = self.get_session(&request.session_id).await?;
-        let mut session = session_mutex
-            .try_lock()
-            .or(Err(Status::aborted("concurrent call in session")))?;
-        let epoch_mutex = session
-            .check_status()
+        self.sessions
+            .try_get_session(&request.session_id)
             .await?
-            .get_active_epoch(request.active_epoch_index)?;
-        {
-            let mut epoch = epoch_mutex.lock().await;
-            epoch
-                .check_active()?
-                .check_pending_inputs()?
-                .check_processed_inputs(request.processed_input_count)?;
-            epoch.finish();
-        }
-        session.start_new_epoch();
+            .try_lock()
+            .or(Err(Status::aborted("concurrent call in session")))?
+            .try_finish_epoch(request.active_epoch_index, request.processed_input_count)
+            .await?;
         Ok(Response::new(Void {}))
     }
 
@@ -205,11 +153,8 @@ impl RollupMachineManager for RollupMachineManagerService {
 
     async fn get_status(&self, _: Request<Void>) -> Result<Response<GetStatusResponse>, Status> {
         log::info!("received get_status");
-        let mut response = GetStatusResponse { session_id: vec![] };
-        if let Some((id, _)) = self.session_cell.lock().await.as_ref() {
-            response.session_id.push(id.clone());
-        }
-        Ok(Response::new(response))
+        let session_id = self.sessions.get_sessions().await;
+        Ok(Response::new(GetStatusResponse { session_id }))
     }
 
     async fn get_session_status(
@@ -218,16 +163,14 @@ impl RollupMachineManager for RollupMachineManagerService {
     ) -> Result<Response<GetSessionStatusResponse>, Status> {
         let request = request.into_inner();
         log::info!("received get_session_status with id={}", request.session_id);
-        let session_mutex = self.get_session(&request.session_id).await?;
-        let session = session_mutex
+        let response = self
+            .sessions
+            .try_get_session(&request.session_id)
+            .await?
             .try_lock()
-            .or(Err(Status::aborted("concurrent call in session")))?;
-        let response = GetSessionStatusResponse {
-            session_id: request.session_id,
-            active_epoch_index: session.active_epoch_index,
-            epoch_index: session.epochs.keys().cloned().collect(),
-            taint_status: session.get_taint_status().await,
-        };
+            .or(Err(Status::aborted("concurrent call in session")))?
+            .get_status(request.session_id)
+            .await;
         Ok(Response::new(response))
     }
 
@@ -241,128 +184,173 @@ impl RollupMachineManager for RollupMachineManagerService {
             request.session_id,
             request.epoch_index
         );
-        let session_mutex = self.get_session(&request.session_id).await?;
-        let session = session_mutex
+        let response = self
+            .sessions
+            .try_get_session(&request.session_id)
+            .await?
             .try_lock()
-            .or(Err(Status::aborted("concurrent call in session")))?;
-        let epoch_mutex = session.get_epoch(request.epoch_index)?;
-        let epoch = epoch_mutex.lock().await;
-        let mut processed_inputs: Vec<ProcessedInput> = Vec::new();
-        for (i, input) in epoch.processed_inputs.iter().enumerate() {
-            let processed_oneof = Some(match input.status {
-                FinishStatus::Accept => ProcessedOneof::Result(InputResult {
-                    voucher_hashes_in_machine: None,
-                    vouchers: Self::convert_vouchers(&input)?,
-                    notice_hashes_in_machine: None,
-                    notices: Self::convert_notices(&input)?,
-                }),
-                FinishStatus::Reject => {
-                    ProcessedOneof::SkipReason(CompletionStatus::RejectedByMachine as i32)
-                }
-            });
-            processed_inputs.push(ProcessedInput {
-                input_index: i as u64,
-                most_recent_machine_hash: None,
-                voucher_hashes_in_epoch: None,
-                notice_hashes_in_epoch: None,
-                reports: Self::convert_reports(&input),
-                processed_oneof,
-            });
-        }
-        let response = GetEpochStatusResponse {
-            session_id: request.session_id,
-            epoch_index: request.epoch_index,
-            state: epoch.state as i32,
-            most_recent_machine_hash: None,
-            most_recent_vouchers_epoch_root_hash: None,
-            most_recent_notices_epoch_root_hash: None,
-            processed_inputs,
-            pending_input_count: epoch.pending_inputs,
-            taint_status: session.get_taint_status().await,
-        };
+            .or(Err(Status::aborted("concurrent call in session")))?
+            .try_get_epoch_status(request.session_id, request.epoch_index)
+            .await?;
         Ok(Response::new(response))
     }
 }
 
-impl RollupMachineManagerService {
-    pub fn new(controller: Controller) -> Self {
+struct SessionManager {
+    entry: Mutex<Option<SessionEntry>>, // The mock supports only a single session
+}
+
+impl SessionManager {
+    fn new() -> Self {
         Self {
-            controller,
-            session_cell: Mutex::new(None),
+            entry: Mutex::new(None),
         }
     }
 
-    async fn get_session(&self, request_id: &String) -> Result<Arc<Mutex<Session>>, Status> {
-        let session_cell = self.session_cell.lock().await;
-        if let Some((id, session)) = session_cell.as_ref() {
-            if id == request_id {
-                return Ok(session.clone());
+    async fn try_set_session(
+        &self,
+        session_id: String,
+        active_epoch_index: u64,
+        controller: Controller,
+    ) -> Result<(), Status> {
+        if session_id == "" {
+            return Err(Status::invalid_argument("session id is empty"));
+        }
+        let mut entry = self.entry.lock().await;
+        match *entry {
+            Some(_) => {
+                log::warn!("the mock only supports a single session");
+                Err(Status::already_exists("session id is taken"))
+            }
+            None => {
+                *entry = Some(SessionEntry::new(
+                    session_id,
+                    active_epoch_index,
+                    controller,
+                ));
+                Ok(())
             }
         }
-        Err(Status::invalid_argument("session id not found"))
     }
 
-    fn decode_ethereum_binary(s: &String) -> Result<Vec<u8>, Status> {
-        conversions::decode_ethereum_binary(s).map_err(|e| {
-            log::warn!("failed to convert Eth binary string from DApp ({})", e);
-            Status::aborted("failed to convert Eth binary string from DApp")
-        })
+    async fn try_get_session(&self, request_id: &String) -> Result<Arc<Mutex<Session>>, Status> {
+        self.entry
+            .lock()
+            .await
+            .as_ref()
+            .and_then(|entry| entry.get_session(request_id))
+            .ok_or(Status::invalid_argument("session id not found"))
     }
 
-    fn convert_vouchers(input: &Input) -> Result<Vec<Voucher>, Status> {
-        let mut vouchers: Vec<Voucher> = Vec::new();
-        for voucher in &input.vouchers {
-            vouchers.push(Voucher {
-                keccak: None,
-                address: Some(Address {
-                    data: Self::decode_ethereum_binary(&voucher.value.address)?,
-                }),
-                payload: Self::decode_ethereum_binary(&voucher.value.payload)?,
-                keccak_in_voucher_hashes: None,
-            });
+    async fn try_del_session(&self, request_id: &String) -> Result<(), Status> {
+        self.try_get_session(&request_id)
+            .await?
+            .try_lock()
+            .or(Err(Status::aborted("concurrent call in session")))?
+            .check_endable()
+            .await?;
+        let mut entry = self.entry.lock().await;
+        *entry = None;
+        Ok(())
+    }
+
+    async fn get_sessions(&self) -> Vec<String> {
+        let mut sessions = Vec::new();
+        if let Some(entry) = self.entry.lock().await.as_ref() {
+            sessions.push(entry.get_id());
         }
-        Ok(vouchers)
-    }
-
-    fn convert_notices(input: &Input) -> Result<Vec<Notice>, Status> {
-        let mut notices: Vec<Notice> = Vec::new();
-        for notice in &input.notices {
-            notices.push(Notice {
-                keccak: None,
-                payload: Self::decode_ethereum_binary(&notice.value.payload)?,
-                keccak_in_notice_hashes: None,
-            });
-        }
-        Ok(notices)
-    }
-
-    fn convert_reports(input: &Input) -> Vec<Report> {
-        let mut reports: Vec<Report> = Vec::new();
-        for report in &input.reports {
-            reports.push(Report {
-                payload: report.payload.as_bytes().iter().copied().collect(),
-            });
-        }
-        reports
+        sessions
     }
 }
 
-impl Session {
-    fn new(active_epoch_index: u64) -> Self {
+struct SessionEntry {
+    id: String,
+    session: Arc<Mutex<Session>>,
+}
+
+impl SessionEntry {
+    fn new(id: String, active_epoch_index: u64, controller: Controller) -> Self {
         Self {
+            id,
+            session: Arc::new(Mutex::new(Session::new(active_epoch_index, controller))),
+        }
+    }
+
+    fn get_session(&self, request_id: &String) -> Option<Arc<Mutex<Session>>> {
+        if &self.id == request_id {
+            Some(self.session.clone())
+        } else {
+            None
+        }
+    }
+
+    fn get_id(&self) -> String {
+        self.id.clone()
+    }
+}
+
+struct Session {
+    controller: Controller,
+    active_epoch_index: u64,
+    epochs: HashMap<u64, Arc<Mutex<Epoch>>>,
+    tainted: Arc<Mutex<Option<Status>>>,
+}
+
+impl Session {
+    fn new(active_epoch_index: u64, controller: Controller) -> Self {
+        Self {
+            controller,
             active_epoch_index,
             epochs: HashMap::from([(active_epoch_index, Arc::new(Mutex::new(Epoch::new())))]),
             tainted: Arc::new(Mutex::new(None)),
         }
     }
 
-    async fn check_status(&self) -> Result<&Self, Status> {
-        if self.active_epoch_index == std::u64::MAX {
-            Err(Status::out_of_range("active epoch index will overflow"))
-        } else if self.tainted.lock().await.is_some() {
-            Err(Status::data_loss("session is tainted"))
-        } else {
-            Ok(self)
+    async fn try_advance(
+        &mut self,
+        active_epoch_index: u64,
+        current_input_index: u64,
+        advance_request: AdvanceRequest,
+    ) -> Result<(), Status> {
+        self.check_epoch_index_overflow()?;
+        self.check_tainted().await?;
+        self.check_active_epoch(active_epoch_index)?;
+        let epoch = self.try_get_epoch(active_epoch_index)?;
+        epoch
+            .lock()
+            .await
+            .try_add_pending_input(current_input_index)?;
+        let finisher = Finisher::new(epoch.clone(), self.tainted.clone());
+        self.controller
+            .advance(advance_request, Box::new(finisher))
+            .await;
+        Ok(())
+    }
+
+    async fn try_finish_epoch(
+        &mut self,
+        active_epoch_index: u64,
+        processed_input_count: u64,
+    ) -> Result<(), Status> {
+        self.check_epoch_index_overflow()?;
+        self.check_tainted().await?;
+        self.check_active_epoch(active_epoch_index)?;
+        self.try_get_epoch(active_epoch_index)?
+            .lock()
+            .await
+            .try_finish(processed_input_count)?;
+        self.active_epoch_index += 1;
+        self.epochs
+            .insert(self.active_epoch_index, Arc::new(Mutex::new(Epoch::new())));
+        Ok(())
+    }
+
+    async fn get_status(&self, session_id: String) -> GetSessionStatusResponse {
+        GetSessionStatusResponse {
+            session_id,
+            active_epoch_index: self.active_epoch_index,
+            epoch_index: self.epochs.keys().cloned().collect(),
+            taint_status: self.get_taint_status().await,
         }
     }
 
@@ -377,30 +365,67 @@ impl Session {
             })
     }
 
-    fn get_epoch(&self, epoch_index: u64) -> Result<&Arc<Mutex<Epoch>>, Status> {
+    async fn try_get_epoch_status(
+        &self,
+        session_id: String,
+        epoch_index: u64,
+    ) -> Result<GetEpochStatusResponse, Status> {
+        self.try_get_epoch(epoch_index)?
+            .lock()
+            .await
+            .try_get_status(session_id, epoch_index, self.get_taint_status().await)
+            .await
+    }
+
+    fn try_get_epoch(&self, epoch_index: u64) -> Result<&Arc<Mutex<Epoch>>, Status> {
         self.epochs
             .get(&epoch_index)
             .ok_or(Status::invalid_argument("unknown epoch index"))
     }
 
-    fn get_active_epoch(&self, active_epoch_index: u64) -> Result<&Arc<Mutex<Epoch>>, Status> {
+    async fn check_endable(&self) -> Result<(), Status> {
+        if self.tainted.lock().await.is_none() {
+            self.try_get_epoch(self.active_epoch_index)?
+                .lock()
+                .await
+                .check_endable()?;
+        }
+        Ok(())
+    }
+
+    async fn check_tainted(&self) -> Result<(), Status> {
+        if self.tainted.lock().await.is_some() {
+            Err(Status::data_loss("session is tainted"))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn check_epoch_index_overflow(&self) -> Result<(), Status> {
+        if self.active_epoch_index == std::u64::MAX {
+            Err(Status::out_of_range("active epoch index will overflow"))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn check_active_epoch(&self, active_epoch_index: u64) -> Result<(), Status> {
         if self.active_epoch_index != active_epoch_index {
             Err(Status::invalid_argument(format!(
                 "incorrect active epoch index (expected {}, got {})",
                 self.active_epoch_index, active_epoch_index
             )))
         } else {
-            self.epochs
-                .get(&active_epoch_index)
-                .ok_or(Status::internal("active epoch not found"))
+            Ok(())
         }
     }
+}
 
-    fn start_new_epoch(&mut self) {
-        self.active_epoch_index += 1;
-        self.epochs
-            .insert(self.active_epoch_index, Arc::new(Mutex::new(Epoch::new())));
-    }
+#[derive(Debug)]
+struct Epoch {
+    state: EpochState,
+    pending_inputs: u64,
+    processed_inputs: Vec<Input>,
 }
 
 impl Epoch {
@@ -412,52 +437,11 @@ impl Epoch {
         }
     }
 
-    fn check_active(&self) -> Result<&Self, Status> {
-        if self.state != EpochState::Active {
-            Err(Status::invalid_argument("epoch is finished"))
-        } else {
-            Ok(self)
-        }
-    }
-
-    fn check_pending_inputs(&self) -> Result<&Self, Status> {
-        if self.pending_inputs != 0 {
-            Err(Status::invalid_argument("epoch still has pending inputs"))
-        } else {
-            Ok(self)
-        }
-    }
-
-    fn check_processed_inputs(&self, processed_input_count: u64) -> Result<&Self, Status> {
-        if self.num_processed_inputs() != processed_input_count {
-            Err(Status::invalid_argument(format!(
-                "incorrect processed input count (expected {}, got {})",
-                self.num_processed_inputs(),
-                processed_input_count
-            )))
-        } else {
-            Ok(self)
-        }
-    }
-
-    fn check_current_input_index(&self, current_input_index: u64) -> Result<&Self, Status> {
-        let epoch_current_input_index = self.pending_inputs + self.num_processed_inputs();
-        if epoch_current_input_index != current_input_index {
-            Err(Status::invalid_argument(format!(
-                "incorrect current input index (expected {}, got {})",
-                epoch_current_input_index, current_input_index
-            )))
-        } else {
-            Ok(self)
-        }
-    }
-
-    fn num_processed_inputs(&self) -> u64 {
-        self.processed_inputs.len() as u64
-    }
-
-    fn add_pending_input(&mut self) {
+    fn try_add_pending_input(&mut self, current_input_index: u64) -> Result<(), Status> {
+        self.check_active()?;
+        self.check_current_input_index(current_input_index)?;
         self.pending_inputs += 1;
+        Ok(())
     }
 
     fn add_processed_input(&mut self, input: Input) {
@@ -465,9 +449,100 @@ impl Epoch {
         self.processed_inputs.push(input);
     }
 
-    fn finish(&mut self) {
+    fn try_finish(&mut self, processed_input_count: u64) -> Result<(), Status> {
+        self.check_active()?;
+        self.check_pending_inputs()?;
+        self.check_processed_inputs(processed_input_count)?;
         self.state = EpochState::Finished;
+        Ok(())
     }
+
+    async fn try_get_status(
+        &self,
+        session_id: String,
+        epoch_index: u64,
+        taint_status: Option<TaintStatus>,
+    ) -> Result<GetEpochStatusResponse, Status> {
+        let mut processed_inputs: Vec<ProcessedInput> = Vec::new();
+        for (i, result) in self.processed_inputs.iter().enumerate() {
+            processed_inputs.push(result.to_grpc(i as u64)?);
+        }
+        Ok(GetEpochStatusResponse {
+            session_id,
+            epoch_index,
+            state: self.state as i32,
+            most_recent_machine_hash: None,
+            most_recent_vouchers_epoch_root_hash: None,
+            most_recent_notices_epoch_root_hash: None,
+            processed_inputs,
+            pending_input_count: self.pending_inputs,
+            taint_status,
+        })
+    }
+
+    fn get_num_processed_inputs(&self) -> u64 {
+        self.processed_inputs.len() as u64
+    }
+
+    fn check_endable(&self) -> Result<(), Status> {
+        self.check_pending_inputs()?;
+        self.check_no_processed_inputs()?;
+        Ok(())
+    }
+
+    fn check_active(&self) -> Result<(), Status> {
+        if self.state != EpochState::Active {
+            Err(Status::invalid_argument("epoch is finished"))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn check_current_input_index(&self, current_input_index: u64) -> Result<(), Status> {
+        let epoch_current_input_index = self.pending_inputs + self.get_num_processed_inputs();
+        if epoch_current_input_index != current_input_index {
+            Err(Status::invalid_argument(format!(
+                "incorrect current input index (expected {}, got {})",
+                epoch_current_input_index, current_input_index
+            )))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn check_pending_inputs(&self) -> Result<(), Status> {
+        if self.pending_inputs != 0 {
+            Err(Status::invalid_argument("epoch still has pending inputs"))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn check_processed_inputs(&self, processed_input_count: u64) -> Result<(), Status> {
+        if self.get_num_processed_inputs() != processed_input_count {
+            Err(Status::invalid_argument(format!(
+                "incorrect processed input count (expected {}, got {})",
+                self.get_num_processed_inputs(),
+                processed_input_count
+            )))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn check_no_processed_inputs(&self) -> Result<(), Status> {
+        if self.get_num_processed_inputs() != 0 {
+            Err(Status::invalid_argument("epoch still has processed inputs"))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Debug)]
+struct Finisher {
+    epoch: Arc<Mutex<Epoch>>,
+    tainted: Arc<Mutex<Option<Status>>>,
 }
 
 impl Finisher {
@@ -480,8 +555,8 @@ impl Finisher {
 impl AdvanceFinisher for Finisher {
     async fn handle(&self, result: Result<Input, AdvanceError>) {
         match result {
-            Ok(input) => {
-                self.epoch.lock().await.add_processed_input(input);
+            Ok(result) => {
+                self.epoch.lock().await.add_processed_input(result);
             }
             Err(e) => {
                 log::error!("something went wrong; tainting session");
@@ -489,4 +564,78 @@ impl AdvanceFinisher for Finisher {
             }
         }
     }
+}
+
+impl Input {
+    fn to_grpc(&self, input_index: u64) -> Result<ProcessedInput, Status> {
+        let mut vouchers: Vec<GrpcVoucher> = Vec::new();
+        for voucher in self.vouchers.iter() {
+            vouchers.push(voucher.value.to_grpc()?);
+        }
+        let mut notices: Vec<GrpcNotice> = Vec::new();
+        for notice in self.notices.iter() {
+            notices.push(notice.value.to_grpc()?);
+        }
+        let mut reports: Vec<GrpcReport> = Vec::new();
+        for report in self.reports.iter() {
+            reports.push(report.to_grpc());
+        }
+        let processed_oneof = Some(match self.status {
+            FinishStatus::Accept => ProcessedOneof::Result(InputResult {
+                voucher_hashes_in_machine: None,
+                vouchers,
+                notice_hashes_in_machine: None,
+                notices,
+            }),
+            FinishStatus::Reject => {
+                ProcessedOneof::SkipReason(CompletionStatus::RejectedByMachine as i32)
+            }
+        });
+        Ok(ProcessedInput {
+            input_index,
+            most_recent_machine_hash: None,
+            voucher_hashes_in_epoch: None,
+            notice_hashes_in_epoch: None,
+            reports,
+            processed_oneof,
+        })
+    }
+}
+
+impl Voucher {
+    fn to_grpc(&self) -> Result<GrpcVoucher, Status> {
+        Ok(GrpcVoucher {
+            keccak: None,
+            address: Some(Address {
+                data: decode_ethereum_binary(&self.address)?,
+            }),
+            payload: decode_ethereum_binary(&self.payload)?,
+            keccak_in_voucher_hashes: None,
+        })
+    }
+}
+
+impl Notice {
+    fn to_grpc(&self) -> Result<GrpcNotice, Status> {
+        Ok(GrpcNotice {
+            keccak: None,
+            payload: decode_ethereum_binary(&self.payload)?,
+            keccak_in_notice_hashes: None,
+        })
+    }
+}
+
+impl Report {
+    fn to_grpc(&self) -> GrpcReport {
+        GrpcReport {
+            payload: self.payload.as_bytes().iter().copied().collect(),
+        }
+    }
+}
+
+fn decode_ethereum_binary(s: &str) -> Result<Vec<u8>, Status> {
+    conversions::decode_ethereum_binary(s).map_err(|e| {
+        log::warn!("failed to convert Eth binary string from DApp ({})", e);
+        Status::aborted("failed to convert Eth binary string from DApp")
+    })
 }
