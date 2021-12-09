@@ -22,15 +22,17 @@ use crate::model::{
     AdvanceRequest, FinishStatus, Identified, Input, InspectRequest, Notice, Report, Voucher,
 };
 
+const BUFFER_SIZE: usize = 1000;
+
 /// Create the controller and its background service
 pub fn new(dapp: Box<dyn DApp>) -> (Controller, ControllerService) {
-    let (advance_tx, advance_rx) = mpsc::channel::<AdvanceRequestWrapper>(1000);
-    let (inspect_tx, inspect_rx) = mpsc::channel::<SyncInspectRequest>(1000);
-    let (voucher_tx, voucher_rx) = mpsc::channel::<SyncVoucherRequest>(1000);
-    let (notice_tx, notice_rx) = mpsc::channel::<SyncNoticeRequest>(1000);
-    let (report_tx, report_rx) = mpsc::channel::<Report>(1000);
-    let (finish_tx, finish_rx) = mpsc::channel::<FinishStatus>(1000);
-    let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>(1000);
+    let (advance_tx, advance_rx) = mpsc::channel::<AdvanceRequestWrapper>(BUFFER_SIZE);
+    let (inspect_tx, inspect_rx) = mpsc::channel::<SyncInspectRequest>(BUFFER_SIZE);
+    let (voucher_tx, voucher_rx) = mpsc::channel::<SyncVoucherRequest>(BUFFER_SIZE);
+    let (notice_tx, notice_rx) = mpsc::channel::<SyncNoticeRequest>(BUFFER_SIZE);
+    let (report_tx, report_rx) = mpsc::channel::<Report>(BUFFER_SIZE);
+    let (finish_tx, finish_rx) = mpsc::channel::<FinishStatus>(BUFFER_SIZE);
+    let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>(BUFFER_SIZE);
 
     let controller = Controller {
         advance_tx,
