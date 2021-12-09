@@ -66,7 +66,7 @@ pub struct Identified<T> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Input {
+pub struct AdvanceResult {
     pub status: FinishStatus,
     pub vouchers: Vec<Identified<Voucher>>,
     pub notices: Vec<Identified<Notice>>,

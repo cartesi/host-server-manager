@@ -19,7 +19,8 @@ use std::{error::Error, fmt};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::model::{
-    AdvanceRequest, FinishStatus, Identified, Input, InspectRequest, Notice, Report, Voucher,
+    AdvanceRequest, AdvanceResult, FinishStatus, Identified, InspectRequest, Notice, Report,
+    Voucher,
 };
 
 const BUFFER_SIZE: usize = 1000;
@@ -109,7 +110,7 @@ pub struct Controller {
 #[cfg_attr(test, automock)]
 #[async_trait]
 pub trait AdvanceFinisher: fmt::Debug + Send + Sync {
-    async fn handle(&self, result: Result<Input, AdvanceError>);
+    async fn handle(&self, result: Result<AdvanceResult, AdvanceError>);
 }
 
 impl Controller {
@@ -374,7 +375,7 @@ impl AdvancingState {
 
     async fn finish(self, status: FinishStatus) -> State {
         log::info!("processing finish request; setting state to idle");
-        let input = Input {
+        let input = AdvanceResult {
             status,
             vouchers: self.vouchers,
             notices: self.notices,
@@ -581,7 +582,7 @@ mod tests {
     async fn test_it_sends_vouchers_notices_and_reports_to_finisher() {
         let request = mock_advance_request();
         let notify = Arc::new(Notify::new());
-        let input = Input {
+        let input = AdvanceResult {
             status: FinishStatus::Reject,
             vouchers: vec![
                 Identified {
@@ -656,8 +657,8 @@ mod tests {
         service.await.unwrap();
     }
 
-    fn mock_input(status: FinishStatus) -> Input {
-        Input {
+    fn mock_input(status: FinishStatus) -> AdvanceResult {
+        AdvanceResult {
             status,
             vouchers: vec![],
             notices: vec![],

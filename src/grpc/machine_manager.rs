@@ -17,7 +17,9 @@ use tonic::{Request, Response, Status};
 
 use crate::controller::{AdvanceError, AdvanceFinisher, Controller};
 use crate::conversions;
-use crate::model::{AdvanceMetadata, AdvanceRequest, FinishStatus, Input, Notice, Report, Voucher};
+use crate::model::{
+    AdvanceMetadata, AdvanceRequest, AdvanceResult, FinishStatus, Notice, Report, Voucher,
+};
 
 use super::proto::cartesi_machine::Void;
 use super::proto::rollup_machine_manager::rollup_machine_manager_server::RollupMachineManager;
@@ -425,7 +427,7 @@ impl Session {
 struct Epoch {
     state: EpochState,
     pending_inputs: u64,
-    processed_inputs: Vec<Input>,
+    processed_inputs: Vec<AdvanceResult>,
 }
 
 impl Epoch {
@@ -444,7 +446,7 @@ impl Epoch {
         Ok(())
     }
 
-    fn add_processed_input(&mut self, input: Input) {
+    fn add_processed_input(&mut self, input: AdvanceResult) {
         self.pending_inputs -= 1;
         self.processed_inputs.push(input);
     }
@@ -553,7 +555,7 @@ impl Finisher {
 
 #[async_trait]
 impl AdvanceFinisher for Finisher {
-    async fn handle(&self, result: Result<Input, AdvanceError>) {
+    async fn handle(&self, result: Result<AdvanceResult, AdvanceError>) {
         match result {
             Ok(result) => {
                 self.epoch.lock().await.add_processed_input(result);
@@ -566,7 +568,7 @@ impl AdvanceFinisher for Finisher {
     }
 }
 
-impl Input {
+impl AdvanceResult {
     fn to_grpc(&self, input_index: u64) -> Result<ProcessedInput, Status> {
         let mut vouchers: Vec<GrpcVoucher> = Vec::new();
         for voucher in self.vouchers.iter() {
