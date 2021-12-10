@@ -15,9 +15,11 @@ use reqwest::{Client, Response, StatusCode};
 use snafu::Snafu;
 use std::error::Error;
 
-use super::config::Config;
-use super::controller::DApp;
-use super::model::{AdvanceRequest, InspectRequest, InspectResponse, Report};
+use crate::config::Config;
+use crate::controller::DApp;
+use crate::conversions;
+use crate::http::model::{HttpAdvanceRequest, HttpInspectResponse};
+use crate::model::{AdvanceRequest, InspectRequest, Report};
 
 /// HTTP client for the DApp backend
 pub struct DAppClient {
@@ -39,35 +41,27 @@ impl DAppClient {
 #[async_trait]
 impl DApp for DAppClient {
     async fn advance(&self, request: AdvanceRequest) -> Result<(), Box<dyn Error + Send + Sync>> {
-        self.client
-            .post(format!("http://{}:{}/advance", self.address, self.port))
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| e.into())
-            .and_then(check_status(StatusCode::ACCEPTED))
-            .map(|_| ())
+        let url = format!("http://{}:{}/advance", self.address, self.port);
+        let request = HttpAdvanceRequest::from(request);
+        let response = self.client.post(url).json(&request).send().await?;
+        check_status(&response, StatusCode::ACCEPTED)
     }
 
     async fn inspect(
         &self,
         request: InspectRequest,
     ) -> Result<Vec<Report>, Box<dyn Error + Send + Sync>> {
-        let response = self
-            .client
-            .get(format!(
-                "http://{}:{}/inspect/{}",
-                self.address, self.port, request.payload
-            ))
-            .send()
-            .await
-            .map_err(|e| e.into())
-            .and_then(check_status(StatusCode::OK))?;
-        response
-            .json::<InspectResponse>()
-            .await
-            .map(|inspect_response| inspect_response.reports)
-            .map_err(|e| e.into())
+        let payload = conversions::encode_ethereum_binary(&request.payload);
+        let url = format!("http://{}:{}/inspect/{}", self.address, self.port, payload);
+        let response = self.client.get(url).send().await?;
+        check_status(&response, StatusCode::OK)?;
+        let response = response.json::<HttpInspectResponse>().await?;
+        let reports = response
+            .reports
+            .into_iter()
+            .map(Report::try_from)
+            .collect::<Result<Vec<Report>, _>>()?;
+        Ok(reports)
     }
 }
 
@@ -83,16 +77,15 @@ pub struct UnexpectedStatusError {
 }
 
 fn check_status(
+    response: &Response,
     expected: StatusCode,
-) -> impl FnOnce(Response) -> Result<Response, Box<dyn Error + Send + Sync>> {
-    move |response| {
-        if expected != response.status() {
-            Err(Box::new(UnexpectedStatusError {
-                expected,
-                obtained: response.status(),
-            }))
-        } else {
-            Ok(response)
-        }
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    if response.status() != expected {
+        Err(Box::new(UnexpectedStatusError {
+            expected,
+            obtained: response.status(),
+        }))
+    } else {
+        Ok(())
     }
 }

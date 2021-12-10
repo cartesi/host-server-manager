@@ -439,14 +439,14 @@ mod tests {
     #[tokio::test]
     async fn test_it_sends_an_inspect_request() {
         let request = InspectRequest {
-            payload: String::from("0xdeadbeef"),
+            payload: vec![1, 2, 3],
         };
         let expected = vec![
             Report {
-                payload: String::from("result1"),
+                payload: vec![4, 5, 6],
             },
             Report {
-                payload: String::from("result2"),
+                payload: vec![7, 8, 9],
             },
         ];
         let mut dapp = Box::new(MockDApp::new());
@@ -505,7 +505,7 @@ mod tests {
     async fn test_it_prioritizes_inspect_requests_over_advance_requests() {
         let advance_request = mock_advance_request();
         let inspect_request = InspectRequest {
-            payload: String::from("0xdeadbeef"),
+            payload: vec![1, 2, 3],
         };
         let advance_notify = &[Arc::new(Notify::new()), Arc::new(Notify::new())];
         let mut dapp = Box::new(MockDApp::new());
@@ -563,14 +563,14 @@ mod tests {
 
         let result = controller
             .insert_notice(Notice {
-                payload: String::from("notice 0"),
+                payload: vec![1, 2, 3],
             })
             .await;
         assert!(matches!(result, Err(InsertError {})));
         let result = controller
             .insert_voucher(Voucher {
-                address: String::from("0x0001"),
-                payload: String::from("voucher 0"),
+                address: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+                payload: vec![4, 5, 6],
             })
             .await;
         assert!(matches!(result, Err(InsertError {})));
@@ -588,15 +588,15 @@ mod tests {
                 Identified {
                     id: 0,
                     value: Voucher {
-                        address: String::from("0x0001"),
-                        payload: String::from("voucher 0"),
+                        address: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+                        payload: vec![1, 2, 3],
                     },
                 },
                 Identified {
                     id: 1,
                     value: Voucher {
-                        address: String::from("0x0002"),
-                        payload: String::from("voucher 1"),
+                        address: [9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8],
+                        payload: vec![4, 5, 6],
                     },
                 },
             ],
@@ -604,18 +604,18 @@ mod tests {
                 Identified {
                     id: 2,
                     value: Notice {
-                        payload: String::from("notice 2"),
+                        payload: vec![7, 8, 9],
                     },
                 },
                 Identified {
                     id: 3,
                     value: Notice {
-                        payload: String::from("notice 3"),
+                        payload: vec![0, 1, 2],
                     },
                 },
             ],
             reports: vec![Report {
-                payload: String::from("0xdeadbeef"),
+                payload: vec![3, 4, 5],
             }],
         };
         let mut finisher = Box::new(MockAdvanceFinisher::new());
@@ -679,13 +679,13 @@ mod tests {
     fn mock_advance_request() -> AdvanceRequest {
         AdvanceRequest {
             metadata: AdvanceMetadata {
-                address: String::from(""),
+                address: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
                 epoch_number: 1,
                 input_number: 2,
                 block_number: 3,
                 timestamp: 1635946561,
             },
-            payload: String::from("0xdeadbeef"),
+            payload: vec![1, 2, 3],
         }
     }
 

@@ -11,13 +11,16 @@
 // specific language governing permissions and limitations under the License.
 
 use actix_web::{
-    http::StatusCode, middleware::Logger, web::Data, App, HttpResponse, HttpServer, Responder,
-    ResponseError,
+    error::Result as HttpResult, middleware::Logger, web::Data, App, HttpResponse, HttpServer,
+    Responder,
 };
 
 use crate::config::Config;
-use crate::controller::{Controller, InspectError};
-use crate::model::{InspectRequest, InspectResponse};
+use crate::controller::Controller;
+use crate::conversions;
+use crate::model::InspectRequest;
+
+use super::model::{HttpInspectResponse, HttpReport};
 
 pub async fn start_service(config: &Config, controller: Controller) -> std::io::Result<()> {
     HttpServer::new(move || {
@@ -35,19 +38,11 @@ pub async fn start_service(config: &Config, controller: Controller) -> std::io::
 }
 
 #[actix_web::get("/inspect/{payload}")]
-async fn inspect(payload: String, controller: Data<Controller>) -> impl Responder {
-    controller
-        .inspect(InspectRequest { payload })
-        .await
-        .map(|reports| HttpResponse::Ok().json(InspectResponse { reports }))
-}
-
-impl ResponseError for InspectError {
-    fn error_response(&self) -> HttpResponse {
-        HttpResponse::InternalServerError().body(self.to_string())
-    }
-
-    fn status_code(&self) -> StatusCode {
-        StatusCode::INTERNAL_SERVER_ERROR
-    }
+async fn inspect(payload: String, controller: Data<Controller>) -> HttpResult<impl Responder> {
+    let payload = conversions::decode_ethereum_binary(&payload)?;
+    let request = InspectRequest { payload };
+    let reports = controller.inspect(request).await?;
+    let reports = reports.into_iter().map(HttpReport::from).collect();
+    let response = HttpInspectResponse { reports };
+    Ok(HttpResponse::Ok().json(response))
 }

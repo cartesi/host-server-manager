@@ -16,9 +16,9 @@ use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
 
 use crate::controller::{AdvanceError, AdvanceFinisher, Controller};
-use crate::conversions;
 use crate::model::{
-    AdvanceMetadata, AdvanceRequest, AdvanceResult, FinishStatus, Notice, Report, Voucher,
+    AdvanceMetadata, AdvanceRequest, AdvanceResult, FinishStatus, Identified, Notice, Report,
+    Voucher,
 };
 
 use super::proto::cartesi_machine::Void;
@@ -100,15 +100,19 @@ impl RollupMachineManager for RollupMachineManagerService {
         let sender = metadata
             .msg_sender
             .ok_or(Status::invalid_argument("missing msg_sender from metadata"))?;
+        let address = sender
+            .data
+            .try_into()
+            .or(Err(Status::invalid_argument("invalid address")))?;
         let advance_request = AdvanceRequest {
             metadata: AdvanceMetadata {
-                address: conversions::encode_ethereum_binary(&sender.data),
+                address,
                 epoch_number: metadata.epoch_index,
                 input_number: metadata.input_index,
                 block_number: metadata.block_number,
                 timestamp: metadata.time_stamp,
             },
-            payload: conversions::encode_ethereum_binary(&request.input_payload),
+            payload: request.input_payload,
         };
         self.sessions
             .try_get_session(&request.session_id)
@@ -372,11 +376,13 @@ impl Session {
         session_id: String,
         epoch_index: u64,
     ) -> Result<GetEpochStatusResponse, Status> {
-        self.try_get_epoch(epoch_index)?
-            .lock()
-            .await
-            .try_get_status(session_id, epoch_index, self.get_taint_status().await)
-            .await
+        let taint_status = self.get_taint_status().await;
+        let response = self.try_get_epoch(epoch_index)?.lock().await.get_status(
+            session_id,
+            epoch_index,
+            taint_status,
+        );
+        Ok(response)
     }
 
     fn try_get_epoch(&self, epoch_index: u64) -> Result<&Arc<Mutex<Epoch>>, Status> {
@@ -459,27 +465,29 @@ impl Epoch {
         Ok(())
     }
 
-    async fn try_get_status(
+    fn get_status(
         &self,
         session_id: String,
         epoch_index: u64,
         taint_status: Option<TaintStatus>,
-    ) -> Result<GetEpochStatusResponse, Status> {
-        let mut processed_inputs: Vec<ProcessedInput> = Vec::new();
-        for (i, result) in self.processed_inputs.iter().enumerate() {
-            processed_inputs.push(result.to_grpc(i as u64)?);
-        }
-        Ok(GetEpochStatusResponse {
+    ) -> GetEpochStatusResponse {
+        GetEpochStatusResponse {
             session_id,
             epoch_index,
             state: self.state as i32,
             most_recent_machine_hash: None,
             most_recent_vouchers_epoch_root_hash: None,
             most_recent_notices_epoch_root_hash: None,
-            processed_inputs,
+            processed_inputs: self
+                .processed_inputs
+                .iter()
+                .cloned()
+                .enumerate()
+                .map(|item| item.into())
+                .collect(),
             pending_input_count: self.pending_inputs,
             taint_status,
-        })
+        }
     }
 
     fn get_num_processed_inputs(&self) -> u64 {
@@ -568,76 +576,64 @@ impl AdvanceFinisher for Finisher {
     }
 }
 
-impl AdvanceResult {
-    fn to_grpc(&self, input_index: u64) -> Result<ProcessedInput, Status> {
-        let mut vouchers: Vec<GrpcVoucher> = Vec::new();
-        for voucher in self.vouchers.iter() {
-            vouchers.push(voucher.value.to_grpc()?);
-        }
-        let mut notices: Vec<GrpcNotice> = Vec::new();
-        for notice in self.notices.iter() {
-            notices.push(notice.value.to_grpc()?);
-        }
-        let mut reports: Vec<GrpcReport> = Vec::new();
-        for report in self.reports.iter() {
-            reports.push(report.to_grpc());
-        }
-        let processed_oneof = Some(match self.status {
+impl From<(usize, AdvanceResult)> for ProcessedInput {
+    fn from((index, result): (usize, AdvanceResult)) -> ProcessedInput {
+        let processed_oneof = Some(match result.status {
             FinishStatus::Accept => ProcessedOneof::Result(InputResult {
                 voucher_hashes_in_machine: None,
-                vouchers,
+                vouchers: convert_vector(result.vouchers),
                 notice_hashes_in_machine: None,
-                notices,
+                notices: convert_vector(result.notices),
             }),
             FinishStatus::Reject => {
                 ProcessedOneof::SkipReason(CompletionStatus::RejectedByMachine as i32)
             }
         });
-        Ok(ProcessedInput {
-            input_index,
+        ProcessedInput {
+            input_index: index as u64,
             most_recent_machine_hash: None,
             voucher_hashes_in_epoch: None,
             notice_hashes_in_epoch: None,
-            reports,
+            reports: convert_vector(result.reports),
             processed_oneof,
-        })
-    }
-}
-
-impl Voucher {
-    fn to_grpc(&self) -> Result<GrpcVoucher, Status> {
-        Ok(GrpcVoucher {
-            keccak: None,
-            address: Some(Address {
-                data: decode_ethereum_binary(&self.address)?,
-            }),
-            payload: decode_ethereum_binary(&self.payload)?,
-            keccak_in_voucher_hashes: None,
-        })
-    }
-}
-
-impl Notice {
-    fn to_grpc(&self) -> Result<GrpcNotice, Status> {
-        Ok(GrpcNotice {
-            keccak: None,
-            payload: decode_ethereum_binary(&self.payload)?,
-            keccak_in_notice_hashes: None,
-        })
-    }
-}
-
-impl Report {
-    fn to_grpc(&self) -> GrpcReport {
-        GrpcReport {
-            payload: self.payload.as_bytes().iter().copied().collect(),
         }
     }
 }
 
-fn decode_ethereum_binary(s: &str) -> Result<Vec<u8>, Status> {
-    conversions::decode_ethereum_binary(s).map_err(|e| {
-        log::warn!("failed to convert Eth binary string from DApp ({})", e);
-        Status::aborted("failed to convert Eth binary string from DApp")
-    })
+impl From<Identified<Voucher>> for GrpcVoucher {
+    fn from(voucher: Identified<Voucher>) -> GrpcVoucher {
+        GrpcVoucher {
+            keccak: None,
+            address: Some(Address {
+                data: voucher.value.address.into(),
+            }),
+            payload: voucher.value.payload,
+            keccak_in_voucher_hashes: None,
+        }
+    }
+}
+
+impl From<Identified<Notice>> for GrpcNotice {
+    fn from(notice: Identified<Notice>) -> GrpcNotice {
+        GrpcNotice {
+            keccak: None,
+            payload: notice.value.payload,
+            keccak_in_notice_hashes: None,
+        }
+    }
+}
+
+impl From<Report> for GrpcReport {
+    fn from(report: Report) -> GrpcReport {
+        GrpcReport {
+            payload: report.payload,
+        }
+    }
+}
+
+fn convert_vector<T, U>(from: Vec<T>) -> Vec<U>
+where
+    U: From<T>,
+{
+    from.into_iter().map(|item| item.into()).collect()
 }

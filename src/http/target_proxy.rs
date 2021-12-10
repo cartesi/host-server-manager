@@ -11,14 +11,15 @@
 // specific language governing permissions and limitations under the License.
 
 use actix_web::{
-    error::ResponseError, http::StatusCode, middleware::Logger, web::Data, web::Json, App,
-    HttpResponse, HttpServer, Responder,
+    error::Result as HttpResult, middleware::Logger, web::Data, web::Json, App, HttpResponse,
+    HttpServer, Responder,
 };
-use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
-use crate::controller::{Controller, InsertError};
+use crate::controller::Controller;
 use crate::model::{FinishStatus, Notice, Report, Voucher};
+
+use super::model::{HttpFinishRequest, HttpIdResponse, HttpNotice, HttpReport, HttpVoucher};
 
 pub async fn start_service(config: &Config, controller: Controller) -> std::io::Result<()> {
     HttpServer::new(move || {
@@ -40,61 +41,42 @@ pub async fn start_service(config: &Config, controller: Controller) -> std::io::
 
 #[actix_web::post("/voucher")]
 async fn voucher(
-    voucher: Json<Voucher>,
+    voucher: Json<HttpVoucher>,
     controller: Data<Controller>,
-) -> Result<impl Responder, InsertError> {
-    controller
-        .insert_voucher(voucher.0)
-        .await
-        .map(|id| HttpResponse::Created().json(IdResponse { id }))
+) -> HttpResult<impl Responder> {
+    let voucher: Voucher = voucher.into_inner().try_into()?;
+    let id = controller.insert_voucher(voucher).await?;
+    let response = HttpIdResponse { id };
+    Ok(HttpResponse::Created().json(response))
 }
 
 #[actix_web::post("/notice")]
 async fn notice(
-    notice: Json<Notice>,
+    notice: Json<HttpNotice>,
     controller: Data<Controller>,
-) -> Result<impl Responder, InsertError> {
-    controller
-        .insert_notice(notice.0)
-        .await
-        .map(|id| HttpResponse::Created().json(IdResponse { id }))
+) -> HttpResult<impl Responder> {
+    let notice: Notice = notice.into_inner().try_into()?;
+    let id = controller.insert_notice(notice).await?;
+    let response = HttpIdResponse { id };
+    Ok(HttpResponse::Created().json(response))
 }
 
 #[actix_web::post("/report")]
-async fn report(report: Json<Report>, controller: Data<Controller>) -> impl Responder {
-    controller.insert_report(report.0).await;
-    HttpResponse::Accepted()
+async fn report(
+    report: Json<HttpReport>,
+    controller: Data<Controller>,
+) -> HttpResult<impl Responder> {
+    let report: Report = report.into_inner().try_into()?;
+    controller.insert_report(report).await;
+    Ok(HttpResponse::Accepted())
 }
 
 #[actix_web::post("/finish")]
-async fn finish(body: Json<FinishRequest>, controller: Data<Controller>) -> impl Responder {
-    let status = match body.status.as_str() {
-        "accept" => FinishStatus::Accept,
-        "reject" => FinishStatus::Reject,
-        _ => {
-            return HttpResponse::UnprocessableEntity().body("status must be 'accept' or 'reject'");
-        }
-    };
+async fn finish(
+    body: Json<HttpFinishRequest>,
+    controller: Data<Controller>,
+) -> HttpResult<impl Responder> {
+    let status: FinishStatus = body.into_inner().try_into()?;
     controller.finish(status).await;
-    HttpResponse::Accepted().finish()
-}
-
-#[derive(Deserialize)]
-struct FinishRequest {
-    status: String,
-}
-
-#[derive(Serialize)]
-struct IdResponse {
-    id: u64,
-}
-
-impl ResponseError for InsertError {
-    fn error_response(&self) -> HttpResponse {
-        HttpResponse::Conflict().body(self.to_string())
-    }
-
-    fn status_code(&self) -> StatusCode {
-        StatusCode::CONFLICT
-    }
+    Ok(HttpResponse::Accepted().finish())
 }

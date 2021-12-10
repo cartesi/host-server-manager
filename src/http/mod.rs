@@ -10,7 +10,9 @@
 // CONDITIONS OF ANY KIND, either express or implied. See the License for the
 // specific language governing permissions and limitations under the License.
 
+pub mod errors;
 mod inspect;
+pub mod model;
 mod target_proxy;
 
 use crate::config::Config;
