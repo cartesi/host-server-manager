@@ -154,7 +154,7 @@ impl RollupMachineManager for RollupMachineManagerService {
     ) -> Result<tonic::Response<InspectStateResponse>, Status> {
         log::warn!("received inspect_state (not implemented)");
         Err(Status::unimplemented(
-            "the inspect_state should be called from the dapp-reader-server HTTP API",
+            "the inspect state should be called from the HTTP API",
         ))
     }
 
