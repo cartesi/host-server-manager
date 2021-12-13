@@ -25,13 +25,13 @@ pub struct Config {
     #[structopt(long, env, default_value = "5000")]
     pub grpc_machine_manager_port: u16,
 
-    /// HTTP address of the Target Proxy endpoint
+    /// HTTP address of the HTTP-Dispatcher endpoint
     #[structopt(long, env, default_value = DEFAULT_ADDRESS)]
-    pub http_target_proxy_address: String,
+    pub http_dispatcher_address: String,
 
-    /// HTTP port of the Target Proxy endpoint
+    /// HTTP port of the HTTP-Dispatcher endpoint
     #[structopt(long, env, default_value = "5001")]
-    pub http_target_proxy_port: u16,
+    pub http_dispatcher_port: u16,
 
     /// HTTP address of the Inspect endpoint
     #[structopt(long, env, default_value = DEFAULT_ADDRESS)]

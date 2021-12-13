@@ -32,8 +32,8 @@ pub async fn start_service(config: &Config, controller: Controller) -> std::io::
             .service(finish)
     })
     .bind((
-        config.http_target_proxy_address.as_str(),
-        config.http_target_proxy_port,
+        config.http_dispatcher_address.as_str(),
+        config.http_dispatcher_port,
     ))?
     .run()
     .await
