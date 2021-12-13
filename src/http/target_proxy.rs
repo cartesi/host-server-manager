@@ -16,7 +16,7 @@ use actix_web::{
 };
 
 use crate::config::Config;
-use crate::controller::Controller;
+use crate::dapp_client::Controller;
 use crate::model::{FinishStatus, Notice, Report, Voucher};
 
 use super::model::{HttpFinishRequest, HttpIdResponse, HttpNotice, HttpReport, HttpVoucher};

@@ -16,8 +16,8 @@ use actix_web::{
 };
 
 use crate::config::Config;
-use crate::controller::Controller;
 use crate::conversions;
+use crate::dapp_client::Controller;
 use crate::model::InspectRequest;
 
 use super::model::{HttpInspectResponse, HttpReport};

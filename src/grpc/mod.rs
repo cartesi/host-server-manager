@@ -21,7 +21,7 @@ use machine_manager::RollupMachineManagerService;
 use proto::rollup_machine_manager::rollup_machine_manager_server::RollupMachineManagerServer;
 
 use crate::config::Config;
-use crate::controller::Controller;
+use crate::dapp_client::Controller;
 
 pub async fn start_service<F: Future<Output = ()>>(
     config: &Config,

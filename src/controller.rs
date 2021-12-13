@@ -15,7 +15,6 @@ use mockall::{automock, predicate::*, Sequence};
 
 use async_trait::async_trait;
 use snafu::Snafu;
-use std::{error::Error, fmt};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::model::{
@@ -26,9 +25,9 @@ use crate::model::{
 const BUFFER_SIZE: usize = 1000;
 
 /// Create the controller and its background service
-pub fn new(dapp: Box<dyn DApp>) -> (Controller, ControllerService) {
-    let (advance_tx, advance_rx) = mpsc::channel::<AdvanceRequestWrapper>(BUFFER_SIZE);
-    let (inspect_tx, inspect_rx) = mpsc::channel::<SyncInspectRequest>(BUFFER_SIZE);
+pub fn new<D: DApp>(dapp: D) -> (Controller<D>, ControllerService<D>) {
+    let (advance_tx, advance_rx) = mpsc::channel::<AdvanceRequestWrapper<D>>(BUFFER_SIZE);
+    let (inspect_tx, inspect_rx) = mpsc::channel::<SyncInspectRequest<D::Error>>(BUFFER_SIZE);
     let (voucher_tx, voucher_rx) = mpsc::channel::<SyncVoucherRequest>(BUFFER_SIZE);
     let (notice_tx, notice_rx) = mpsc::channel::<SyncNoticeRequest>(BUFFER_SIZE);
     let (report_tx, report_rx) = mpsc::channel::<Report>(BUFFER_SIZE);
@@ -60,43 +59,34 @@ pub fn new(dapp: Box<dyn DApp>) -> (Controller, ControllerService) {
 }
 
 /// Channel used to communicate with the DApp
-#[cfg_attr(test, automock)]
+#[cfg_attr(test, automock(type Error=MockDAppError;))]
 #[async_trait]
-pub trait DApp: Send + Sync {
+pub trait DApp: std::fmt::Debug + Send + Sync {
+    type Error: std::error::Error + Send + Sync;
+
     /// Send an advance request to the client
-    async fn advance(&self, request: AdvanceRequest) -> Result<(), Box<dyn Error + Send + Sync>>;
+    async fn advance(&self, request: AdvanceRequest) -> Result<(), Self::Error>;
 
     /// Send an inspect request to the client
-    async fn inspect(
-        &self,
-        request: InspectRequest,
-    ) -> Result<Vec<Report>, Box<dyn Error + Send + Sync>>;
+    async fn inspect(&self, request: InspectRequest) -> Result<Vec<Report>, Self::Error>;
 }
+
+#[cfg(test)]
+#[derive(Debug, Snafu)]
+#[snafu(display("mock dapp error"))]
+pub struct MockDAppError {}
 
 #[derive(Debug, Snafu)]
 #[snafu(display("request not accepted when state is idle"))]
 pub struct InsertError {}
 
-#[derive(Debug, Snafu)]
-#[snafu(display("failed to send inspect request to dapp: {}", e))]
-pub struct InspectError {
-    e: Box<dyn Error + Send + Sync>,
-}
-
-#[derive(Debug, Snafu)]
-#[snafu(display("failed to send advance request to dapp: {}", e))]
-pub struct AdvanceError {
-    e: Box<dyn Error + Send + Sync>,
-}
-
 /// State-machine that controls whether the Mock is processing an input (advancing the rollups
 /// epoch state) or idle.
 /// When processing an input, the Mock receives vouchers, notices, and reports until it receives a
 /// finish request.
-#[derive(Clone)]
-pub struct Controller {
-    advance_tx: mpsc::Sender<AdvanceRequestWrapper>,
-    inspect_tx: mpsc::Sender<SyncInspectRequest>,
+pub struct Controller<D: DApp> {
+    advance_tx: mpsc::Sender<AdvanceRequestWrapper<D>>,
+    inspect_tx: mpsc::Sender<SyncInspectRequest<D::Error>>,
     voucher_tx: mpsc::Sender<SyncVoucherRequest>,
     notice_tx: mpsc::Sender<SyncNoticeRequest>,
     report_tx: mpsc::Sender<Report>,
@@ -104,19 +94,34 @@ pub struct Controller {
     shutdown_tx: mpsc::Sender<()>,
 }
 
+// Auto derive clone doesn't work well with generics
+impl<D: DApp> Clone for Controller<D> {
+    fn clone(&self) -> Self {
+        Self {
+            advance_tx: self.advance_tx.clone(),
+            inspect_tx: self.inspect_tx.clone(),
+            voucher_tx: self.voucher_tx.clone(),
+            notice_tx: self.notice_tx.clone(),
+            report_tx: self.report_tx.clone(),
+            finish_tx: self.finish_tx.clone(),
+            shutdown_tx: self.shutdown_tx.clone(),
+        }
+    }
+}
+
 /// Callback object that will be called when advance if finished
 /// This could be callback, but async closures are unstable at the current version of Rust
 /// https://github.com/rust-lang/rust/issues/62290
 #[cfg_attr(test, automock)]
 #[async_trait]
-pub trait AdvanceFinisher: fmt::Debug + Send + Sync {
-    async fn handle(&self, result: Result<AdvanceResult, AdvanceError>);
+pub trait AdvanceFinisher<D: DApp>: std::fmt::Debug + Send + Sync {
+    async fn handle(&self, result: Result<AdvanceResult, D::Error>);
 }
 
-impl Controller {
+impl<D: DApp> Controller<D> {
     /// Send an advance request
     /// The request will run in the background and the callback will be called when it is finished.
-    pub async fn advance(&self, request: AdvanceRequest, finisher: Box<dyn AdvanceFinisher>) {
+    pub async fn advance(&self, request: AdvanceRequest, finisher: Box<dyn AdvanceFinisher<D>>) {
         self.advance_tx
             .send(AdvanceRequestWrapper { request, finisher })
             .await
@@ -125,7 +130,7 @@ impl Controller {
 
     /// Send an inspect request and wait for the report
     /// The function only returns when the request is complete.
-    pub async fn inspect(&self, request: InspectRequest) -> Result<Vec<Report>, InspectError> {
+    pub async fn inspect(&self, request: InspectRequest) -> Result<Vec<Report>, D::Error> {
         Self::make_sync_request(request, &self.inspect_tx).await
     }
 
@@ -179,10 +184,10 @@ impl Controller {
 }
 
 /// Service that processes the requests and should be ran in the background
-pub struct ControllerService {
-    state: State,
-    advance_rx: mpsc::Receiver<AdvanceRequestWrapper>,
-    inspect_rx: mpsc::Receiver<SyncInspectRequest>,
+pub struct ControllerService<D: DApp> {
+    state: State<D>,
+    advance_rx: mpsc::Receiver<AdvanceRequestWrapper<D>>,
+    inspect_rx: mpsc::Receiver<SyncInspectRequest<D::Error>>,
     voucher_rx: mpsc::Receiver<SyncVoucherRequest>,
     notice_rx: mpsc::Receiver<SyncNoticeRequest>,
     report_rx: mpsc::Receiver<Report>,
@@ -190,7 +195,7 @@ pub struct ControllerService {
     shutdown_rx: mpsc::Receiver<()>,
 }
 
-impl ControllerService {
+impl<D: DApp> ControllerService<D> {
     pub async fn run(mut self) {
         loop {
             self.state = match self.state {
@@ -247,9 +252,9 @@ impl ControllerService {
 }
 
 #[derive(Debug)]
-struct AdvanceRequestWrapper {
+struct AdvanceRequestWrapper<D: DApp> {
     request: AdvanceRequest,
-    finisher: Box<dyn AdvanceFinisher>,
+    finisher: Box<dyn AdvanceFinisher<D>>,
 }
 
 #[derive(Debug)]
@@ -258,48 +263,48 @@ struct SyncRequest<T: Send + Sync, U: Send + Sync> {
     response_tx: oneshot::Sender<U>,
 }
 
-type SyncInspectRequest = SyncRequest<InspectRequest, Result<Vec<Report>, InspectError>>;
+type SyncInspectRequest<E> = SyncRequest<InspectRequest, Result<Vec<Report>, E>>;
 type SyncVoucherRequest = SyncRequest<Voucher, Result<u64, InsertError>>;
 type SyncNoticeRequest = SyncRequest<Notice, Result<u64, InsertError>>;
 
-enum State {
-    Idle(IdleState),
-    Advancing(AdvancingState),
+enum State<D: DApp> {
+    Idle(IdleState<D>),
+    Advancing(AdvancingState<D>),
 }
 
-struct IdleState {
-    dapp: Box<dyn DApp>,
+struct IdleState<D: DApp> {
+    dapp: D,
     id: u64,
 }
 
-impl IdleState {
-    fn new(dapp: Box<dyn DApp>, id: u64) -> State {
+impl<D: DApp> IdleState<D> {
+    fn new(dapp: D, id: u64) -> State<D> {
         State::Idle(Self { dapp, id })
     }
 
-    fn insert_voucher(self, request: SyncVoucherRequest) -> State {
+    fn insert_voucher(self, request: SyncVoucherRequest) -> State<D> {
         log::warn!("ignoring voucher when idle");
         Self::reject_insert_request(request);
         State::Idle(self)
     }
 
-    fn insert_notice(self, request: SyncNoticeRequest) -> State {
+    fn insert_notice(self, request: SyncNoticeRequest) -> State<D> {
         log::warn!("ignoring notice when idle");
         Self::reject_insert_request(request);
         State::Idle(self)
     }
 
-    fn insert_report(self) -> State {
+    fn insert_report(self) -> State<D> {
         log::warn!("ignoring report when idle");
         State::Idle(self)
     }
 
-    fn finish(self) -> State {
+    fn finish(self) -> State<D> {
         log::warn!("ignoring finish when idle");
         State::Idle(self)
     }
 
-    async fn advance(self, wrapper: AdvanceRequestWrapper) -> State {
+    async fn advance(self, wrapper: AdvanceRequestWrapper<D>) -> State<D> {
         match self.dapp.advance(wrapper.request).await {
             Ok(_) => {
                 log::info!("setting state to advance");
@@ -307,17 +312,17 @@ impl IdleState {
             }
             Err(e) => {
                 log::error!("failed to advance state with error: {}", e);
-                wrapper.finisher.handle(Err(AdvanceError { e })).await;
+                wrapper.finisher.handle(Err(e)).await;
                 State::Idle(self)
             }
         }
     }
 
-    async fn inspect(self, request: SyncInspectRequest) -> State {
+    async fn inspect(self, request: SyncInspectRequest<D::Error>) -> State<D> {
         log::info!("processing inspect request");
         let response = self.dapp.inspect(request.value).await.map_err(|e| {
             log::error!("failed to inspect with error: {}", e);
-            InspectError { e }
+            e
         });
         request
             .response_tx
@@ -334,17 +339,17 @@ impl IdleState {
     }
 }
 
-struct AdvancingState {
-    dapp: Box<dyn DApp>,
+struct AdvancingState<D: DApp> {
+    dapp: D,
     id: u64,
-    finisher: Box<dyn AdvanceFinisher>,
+    finisher: Box<dyn AdvanceFinisher<D>>,
     vouchers: Vec<Identified<Voucher>>,
     notices: Vec<Identified<Notice>>,
     reports: Vec<Report>,
 }
 
-impl AdvancingState {
-    fn new(dapp: Box<dyn DApp>, id: u64, finisher: Box<dyn AdvanceFinisher>) -> State {
+impl<D: DApp> AdvancingState<D> {
+    fn new(dapp: D, id: u64, finisher: Box<dyn AdvanceFinisher<D>>) -> State<D> {
         State::Advancing(Self {
             dapp,
             id,
@@ -355,25 +360,25 @@ impl AdvancingState {
         })
     }
 
-    async fn insert_voucher(mut self, request: SyncVoucherRequest) -> State {
+    async fn insert_voucher(mut self, request: SyncVoucherRequest) -> State<D> {
         log::info!("processing voucher request");
         Self::insert_identified(request, &mut self.vouchers, &mut self.id);
         State::Advancing(self)
     }
 
-    async fn insert_notice(mut self, request: SyncNoticeRequest) -> State {
+    async fn insert_notice(mut self, request: SyncNoticeRequest) -> State<D> {
         log::info!("processing notice request");
         Self::insert_identified(request, &mut self.notices, &mut self.id);
         State::Advancing(self)
     }
 
-    async fn insert_report(mut self, report: Report) -> State {
+    async fn insert_report(mut self, report: Report) -> State<D> {
         log::info!("processing report request");
         self.reports.push(report);
         State::Advancing(self)
     }
 
-    async fn finish(self, status: FinishStatus) -> State {
+    async fn finish(self, status: FinishStatus) -> State<D> {
         log::info!("processing finish request; setting state to idle");
         let input = AdvanceResult {
             status,
@@ -413,7 +418,7 @@ mod tests {
     async fn test_it_sends_an_advance_request() {
         let notify = Arc::new(Notify::new());
         let request = mock_advance_request();
-        let mut dapp = Box::new(MockDApp::new());
+        let mut dapp = MockDApp::new();
         {
             let notify = notify.clone();
             dapp.expect_advance()
@@ -449,7 +454,7 @@ mod tests {
                 payload: vec![7, 8, 9],
             },
         ];
-        let mut dapp = Box::new(MockDApp::new());
+        let mut dapp = MockDApp::new();
         {
             let response = expected.clone();
             dapp.expect_inspect()
@@ -474,7 +479,7 @@ mod tests {
             Arc::new(Notify::new()),
             Arc::new(Notify::new()),
         ];
-        let mut dapp = Box::new(MockDApp::new());
+        let mut dapp = MockDApp::new();
         let mut sequence = Sequence::new();
         for notify in &notifies {
             let notify = notify.clone();
@@ -508,7 +513,7 @@ mod tests {
             payload: vec![1, 2, 3],
         };
         let advance_notify = &[Arc::new(Notify::new()), Arc::new(Notify::new())];
-        let mut dapp = Box::new(MockDApp::new());
+        let mut dapp = MockDApp::new();
         {
             let advance_notify_0 = advance_notify[0].clone();
             let advance_notify_1 = advance_notify[1].clone();
@@ -557,7 +562,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_it_rejects_vouchers_and_notices_when_idle() {
-        let dapp = Box::new(MockDApp::new());
+        let dapp = MockDApp::new();
         let (controller, service) = new(dapp);
         let service = tokio::spawn(service.run());
 
@@ -624,7 +629,7 @@ mod tests {
             .times(1)
             .with(eq(Ok(input.clone())))
             .return_once(|_| ());
-        let mut dapp = Box::new(MockDApp::new());
+        let mut dapp = MockDApp::new();
         {
             let notify = notify.clone();
             dapp.expect_advance().times(1).return_once(move |_| {
@@ -666,7 +671,7 @@ mod tests {
         }
     }
 
-    fn mock_finisher(status: FinishStatus) -> Box<dyn AdvanceFinisher> {
+    fn mock_finisher(status: FinishStatus) -> Box<dyn AdvanceFinisher<MockDApp>> {
         let mut finisher = Box::new(MockAdvanceFinisher::new());
         finisher
             .expect_handle()
@@ -690,9 +695,9 @@ mod tests {
     }
 
     // This is required to use the eq predicate in the finisher mock
-    impl PartialEq for AdvanceError {
-        fn eq(&self, rhs: &Self) -> bool {
-            self.e.to_string() == rhs.e.to_string()
+    impl PartialEq for MockDAppError {
+        fn eq(&self, _: &Self) -> bool {
+            true
         }
     }
 }

@@ -34,7 +34,7 @@ async fn main() {
     let config = Config::from_args();
     log::info!("{:#?}", config);
 
-    let dapp_client = Box::new(DAppClient::new(&config));
+    let dapp_client = DAppClient::new(&config);
     let (controller, controller_service) = controller::new(dapp_client);
     let controller_service = tokio::spawn(async {
         controller_service.run().await;

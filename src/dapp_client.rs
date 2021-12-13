@@ -13,7 +13,6 @@
 use async_trait::async_trait;
 use reqwest::{Client, Response, StatusCode};
 use snafu::Snafu;
-use std::error::Error;
 
 use crate::config::Config;
 use crate::controller::DApp;
@@ -21,7 +20,10 @@ use crate::conversions;
 use crate::http::model::{HttpAdvanceRequest, HttpInspectResponse};
 use crate::model::{AdvanceRequest, InspectRequest, Report};
 
+pub type Controller = crate::controller::Controller<DAppClient>;
+
 /// HTTP client for the DApp backend
+#[derive(Debug)]
 pub struct DAppClient {
     address: String,
     port: u16,
@@ -40,17 +42,16 @@ impl DAppClient {
 
 #[async_trait]
 impl DApp for DAppClient {
-    async fn advance(&self, request: AdvanceRequest) -> Result<(), Box<dyn Error + Send + Sync>> {
+    type Error = DAppError;
+
+    async fn advance(&self, request: AdvanceRequest) -> Result<(), Self::Error> {
         let url = format!("http://{}:{}/advance", self.address, self.port);
         let request = HttpAdvanceRequest::from(request);
         let response = self.client.post(url).json(&request).send().await?;
         check_status(&response, StatusCode::ACCEPTED)
     }
 
-    async fn inspect(
-        &self,
-        request: InspectRequest,
-    ) -> Result<Vec<Report>, Box<dyn Error + Send + Sync>> {
+    async fn inspect(&self, request: InspectRequest) -> Result<Vec<Report>, Self::Error> {
         let payload = conversions::encode_ethereum_binary(&request.payload);
         let url = format!("http://{}:{}/inspect/{}", self.address, self.port, payload);
         let response = self.client.get(url).send().await?;
@@ -66,25 +67,40 @@ impl DApp for DAppClient {
 }
 
 #[derive(Debug, Snafu)]
-#[snafu(display(
-    "wrong status in HTTP call (expected {} but got {})",
-    expected,
-    obtained
-))]
-pub struct UnexpectedStatusError {
-    expected: StatusCode,
-    obtained: StatusCode,
+pub enum DAppError {
+    #[snafu(display(
+        "wrong status in HTTP call (expected {} but got {})",
+        expected,
+        obtained
+    ))]
+    UnexpectedStatusError {
+        expected: StatusCode,
+        obtained: StatusCode,
+    },
+    #[snafu(display("HTTP request error ({})", e))]
+    ReqwestError { e: reqwest::Error },
+    #[snafu(display("Hex decode error ({})", e))]
+    HexDecodeError { e: conversions::DecodeError },
 }
 
-fn check_status(
-    response: &Response,
-    expected: StatusCode,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+impl From<reqwest::Error> for DAppError {
+    fn from(e: reqwest::Error) -> DAppError {
+        DAppError::ReqwestError { e }
+    }
+}
+
+impl From<conversions::DecodeError> for DAppError {
+    fn from(e: conversions::DecodeError) -> DAppError {
+        DAppError::HexDecodeError { e }
+    }
+}
+
+fn check_status(response: &Response, expected: StatusCode) -> Result<(), DAppError> {
     if response.status() != expected {
-        Err(Box::new(UnexpectedStatusError {
+        Err(DAppError::UnexpectedStatusError {
             expected,
             obtained: response.status(),
-        }))
+        })
     } else {
         Ok(())
     }

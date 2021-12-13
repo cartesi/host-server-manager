@@ -12,13 +12,14 @@
 
 use actix_web::{error, error::Error};
 
-use crate::controller::{InsertError, InspectError};
+use crate::controller::InsertError;
 use crate::conversions::DecodeError;
+use crate::dapp_client::DAppError;
 
 use super::model::{DecodeStatusError, VoucherDecodeError};
 
-impl From<InspectError> for Error {
-    fn from(e: InspectError) -> Error {
+impl From<DAppError> for Error {
+    fn from(e: DAppError) -> Error {
         error::ErrorInternalServerError(e.to_string())
     }
 }

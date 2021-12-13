@@ -16,7 +16,7 @@ pub mod model;
 mod target_proxy;
 
 use crate::config::Config;
-use crate::controller::Controller;
+use crate::dapp_client::Controller;
 
 /// Setup the HTTP server that receives requests from the DApp backend
 pub async fn start_services(config: &Config, controller: Controller) -> std::io::Result<()> {

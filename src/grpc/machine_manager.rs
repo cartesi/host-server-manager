@@ -15,7 +15,8 @@ use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
 
-use crate::controller::{AdvanceError, AdvanceFinisher, Controller};
+use crate::controller::AdvanceFinisher;
+use crate::dapp_client::{Controller, DAppClient, DAppError};
 use crate::model::{
     AdvanceMetadata, AdvanceRequest, AdvanceResult, FinishStatus, Identified, Notice, Report,
     Voucher,
@@ -562,8 +563,8 @@ impl Finisher {
 }
 
 #[async_trait]
-impl AdvanceFinisher for Finisher {
-    async fn handle(&self, result: Result<AdvanceResult, AdvanceError>) {
+impl AdvanceFinisher<DAppClient> for Finisher {
+    async fn handle(&self, result: Result<AdvanceResult, DAppError>) {
         match result {
             Ok(result) => {
                 self.epoch.lock().await.add_processed_input(result);
