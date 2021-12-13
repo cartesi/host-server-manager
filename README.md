@@ -9,7 +9,7 @@ This project also simulates the Inspect API provided by the Inspect Container.
 This project requires Rust.
 To install Rust follow the instructions [here](https://www.rust-lang.org/tools/install).
 
-## Depencies
+## Depedencies
 
 Before building and running the project, you should download the submoules with:
 
