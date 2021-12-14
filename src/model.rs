@@ -28,20 +28,14 @@ pub struct AdvanceRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdvanceResult {
     pub status: FinishStatus,
-    pub vouchers: Vec<Identified<Voucher>>,
-    pub notices: Vec<Identified<Notice>>,
+    pub vouchers: Vec<Voucher>,
+    pub notices: Vec<Notice>,
     pub reports: Vec<Report>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InspectRequest {
     pub payload: Vec<u8>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Identified<T> {
-    pub id: u64,
-    pub value: T,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

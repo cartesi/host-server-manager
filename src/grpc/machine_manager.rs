@@ -18,8 +18,7 @@ use tonic::{Request, Response, Status};
 use crate::controller::AdvanceFinisher;
 use crate::dapp_client::{Controller, DAppClient, DAppError};
 use crate::model::{
-    AdvanceMetadata, AdvanceRequest, AdvanceResult, FinishStatus, Identified, Notice, Report,
-    Voucher,
+    AdvanceMetadata, AdvanceRequest, AdvanceResult, FinishStatus, Notice, Report, Voucher,
 };
 
 use super::proto::cartesi_machine::Void;
@@ -601,24 +600,24 @@ impl From<(usize, AdvanceResult)> for ProcessedInput {
     }
 }
 
-impl From<Identified<Voucher>> for GrpcVoucher {
-    fn from(voucher: Identified<Voucher>) -> GrpcVoucher {
+impl From<Voucher> for GrpcVoucher {
+    fn from(voucher: Voucher) -> GrpcVoucher {
         GrpcVoucher {
             keccak: None,
             address: Some(Address {
-                data: voucher.value.address.into(),
+                data: voucher.address.into(),
             }),
-            payload: voucher.value.payload,
+            payload: voucher.payload,
             keccak_in_voucher_hashes: None,
         }
     }
 }
 
-impl From<Identified<Notice>> for GrpcNotice {
-    fn from(notice: Identified<Notice>) -> GrpcNotice {
+impl From<Notice> for GrpcNotice {
+    fn from(notice: Notice) -> GrpcNotice {
         GrpcNotice {
             keccak: None,
-            payload: notice.value.payload,
+            payload: notice.payload,
             keccak_in_notice_hashes: None,
         }
     }

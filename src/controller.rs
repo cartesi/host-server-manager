@@ -18,8 +18,7 @@ use snafu::Snafu;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::model::{
-    AdvanceRequest, AdvanceResult, FinishStatus, Identified, InspectRequest, Notice, Report,
-    Voucher,
+    AdvanceRequest, AdvanceResult, FinishStatus, InspectRequest, Notice, Report, Voucher,
 };
 
 const BUFFER_SIZE: usize = 1000;
@@ -45,7 +44,7 @@ pub fn new<D: DApp>(dapp: D) -> (Controller<D>, ControllerService<D>) {
     };
 
     let service = ControllerService {
-        state: IdleState::new(dapp, 0),
+        state: IdleState::new(dapp),
         advance_rx,
         inspect_rx,
         voucher_rx,
@@ -274,12 +273,11 @@ enum State<D: DApp> {
 
 struct IdleState<D: DApp> {
     dapp: D,
-    id: u64,
 }
 
 impl<D: DApp> IdleState<D> {
-    fn new(dapp: D, id: u64) -> State<D> {
-        State::Idle(Self { dapp, id })
+    fn new(dapp: D) -> State<D> {
+        State::Idle(Self { dapp })
     }
 
     fn insert_voucher(self, request: SyncVoucherRequest) -> State<D> {
@@ -308,7 +306,7 @@ impl<D: DApp> IdleState<D> {
         match self.dapp.advance(wrapper.request).await {
             Ok(_) => {
                 log::info!("setting state to advance");
-                AdvancingState::new(self.dapp, self.id, wrapper.finisher)
+                AdvancingState::new(self.dapp, wrapper.finisher)
             }
             Err(e) => {
                 log::error!("failed to advance state with error: {}", e);
@@ -341,18 +339,16 @@ impl<D: DApp> IdleState<D> {
 
 struct AdvancingState<D: DApp> {
     dapp: D,
-    id: u64,
     finisher: Box<dyn AdvanceFinisher<D>>,
-    vouchers: Vec<Identified<Voucher>>,
-    notices: Vec<Identified<Notice>>,
+    vouchers: Vec<Voucher>,
+    notices: Vec<Notice>,
     reports: Vec<Report>,
 }
 
 impl<D: DApp> AdvancingState<D> {
-    fn new(dapp: D, id: u64, finisher: Box<dyn AdvanceFinisher<D>>) -> State<D> {
+    fn new(dapp: D, finisher: Box<dyn AdvanceFinisher<D>>) -> State<D> {
         State::Advancing(Self {
             dapp,
-            id,
             finisher,
             vouchers: vec![],
             notices: vec![],
@@ -362,13 +358,13 @@ impl<D: DApp> AdvancingState<D> {
 
     async fn insert_voucher(mut self, request: SyncVoucherRequest) -> State<D> {
         log::info!("processing voucher request");
-        Self::insert_identified(request, &mut self.vouchers, &mut self.id);
+        Self::insert_indexed(request, &mut self.vouchers);
         State::Advancing(self)
     }
 
     async fn insert_notice(mut self, request: SyncNoticeRequest) -> State<D> {
         log::info!("processing notice request");
-        Self::insert_identified(request, &mut self.notices, &mut self.id);
+        Self::insert_indexed(request, &mut self.notices);
         State::Advancing(self)
     }
 
@@ -387,23 +383,19 @@ impl<D: DApp> AdvancingState<D> {
             reports: self.reports,
         };
         self.finisher.handle(Ok(input)).await;
-        IdleState::new(self.dapp, self.id)
+        IdleState::new(self.dapp)
     }
 
-    fn insert_identified<T: Send + Sync>(
+    fn insert_indexed<T: Send + Sync>(
         request: SyncRequest<T, Result<u64, InsertError>>,
-        vector: &mut Vec<Identified<T>>,
-        id: &mut u64,
+        vector: &mut Vec<T>,
     ) {
-        vector.push(Identified {
-            id: *id,
-            value: request.value,
-        });
+        let index = vector.len() as u64;
+        vector.push(request.value);
         request
             .response_tx
-            .send(Ok(*id))
+            .send(Ok(index))
             .expect("send should not fail");
-        *id = *id + 1;
     }
 }
 
@@ -590,33 +582,21 @@ mod tests {
         let input = AdvanceResult {
             status: FinishStatus::Reject,
             vouchers: vec![
-                Identified {
-                    id: 0,
-                    value: Voucher {
-                        address: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
-                        payload: vec![1, 2, 3],
-                    },
+                Voucher {
+                    address: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+                    payload: vec![1, 2, 3],
                 },
-                Identified {
-                    id: 1,
-                    value: Voucher {
-                        address: [9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8],
-                        payload: vec![4, 5, 6],
-                    },
+                Voucher {
+                    address: [9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8],
+                    payload: vec![4, 5, 6],
                 },
             ],
             notices: vec![
-                Identified {
-                    id: 2,
-                    value: Notice {
-                        payload: vec![7, 8, 9],
-                    },
+                Notice {
+                    payload: vec![7, 8, 9],
                 },
-                Identified {
-                    id: 3,
-                    value: Notice {
-                        payload: vec![0, 1, 2],
-                    },
+                Notice {
+                    payload: vec![0, 1, 2],
                 },
             ],
             reports: vec![Report {
@@ -643,16 +623,10 @@ mod tests {
         controller.advance(request, finisher).await;
         notify.notified().await;
         for voucher in input.vouchers {
-            controller
-                .insert_voucher(voucher.value.clone())
-                .await
-                .unwrap();
+            controller.insert_voucher(voucher.clone()).await.unwrap();
         }
         for notice in input.notices {
-            controller
-                .insert_notice(notice.value.clone())
-                .await
-                .unwrap();
+            controller.insert_notice(notice.clone()).await.unwrap();
         }
         for report in input.reports {
             controller.insert_report(report).await;

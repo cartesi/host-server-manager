@@ -19,7 +19,7 @@ use crate::config::Config;
 use crate::dapp_client::Controller;
 use crate::model::{FinishStatus, Notice, Report, Voucher};
 
-use super::model::{HttpFinishRequest, HttpIdResponse, HttpNotice, HttpReport, HttpVoucher};
+use super::model::{HttpFinishRequest, HttpIndexResponse, HttpNotice, HttpReport, HttpVoucher};
 
 pub async fn start_service(config: &Config, controller: Controller) -> std::io::Result<()> {
     HttpServer::new(move || {
@@ -45,8 +45,8 @@ async fn voucher(
     controller: Data<Controller>,
 ) -> HttpResult<impl Responder> {
     let voucher: Voucher = voucher.into_inner().try_into()?;
-    let id = controller.insert_voucher(voucher).await?;
-    let response = HttpIdResponse { id };
+    let index = controller.insert_voucher(voucher).await?;
+    let response = HttpIndexResponse { index };
     Ok(HttpResponse::Created().json(response))
 }
 
@@ -56,8 +56,8 @@ async fn notice(
     controller: Data<Controller>,
 ) -> HttpResult<impl Responder> {
     let notice: Notice = notice.into_inner().try_into()?;
-    let id = controller.insert_notice(notice).await?;
-    let response = HttpIdResponse { id };
+    let index = controller.insert_notice(notice).await?;
+    let response = HttpIndexResponse { index };
     Ok(HttpResponse::Created().json(response))
 }
 

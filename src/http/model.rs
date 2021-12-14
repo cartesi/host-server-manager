@@ -130,8 +130,8 @@ impl TryFrom<HttpReport> for Report {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct HttpIdResponse {
-    pub id: u64,
+pub struct HttpIndexResponse {
+    pub index: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
