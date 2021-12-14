@@ -11,8 +11,8 @@
 // specific language governing permissions and limitations under the License.
 
 use actix_web::{
-    error::Result as HttpResult, middleware::Logger, web::Data, App, HttpResponse, HttpServer,
-    Responder,
+    error::Result as HttpResult, middleware::Logger, web::Data, web::Path, App, HttpResponse,
+    HttpServer, Responder,
 };
 
 use crate::config::Config;
@@ -38,8 +38,11 @@ pub async fn start_service(config: &Config, controller: Controller) -> std::io::
 }
 
 #[actix_web::get("/inspect/{payload}")]
-async fn inspect(payload: String, controller: Data<Controller>) -> HttpResult<impl Responder> {
-    let payload = conversions::decode_ethereum_binary(&payload)?;
+async fn inspect(
+    payload: Path<String>,
+    controller: Data<Controller>,
+) -> HttpResult<impl Responder> {
+    let payload = conversions::decode_ethereum_binary(payload.as_ref())?;
     let request = InspectRequest { payload };
     let reports = controller.inspect(request).await?;
     let reports = reports.into_iter().map(HttpReport::from).collect();
