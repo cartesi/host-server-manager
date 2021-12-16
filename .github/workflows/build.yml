@@ -39,7 +39,7 @@ jobs:
         id: docker_meta
         uses: docker/metadata-action@v3
         with:
-          images: ${{ secrets.DOCKER_ORGANIZATION }}/mock-rollups-machine-manager
+          images: ${{ secrets.DOCKER_ORGANIZATION }}/host-server-manager
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}

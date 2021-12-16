@@ -10,8 +10,8 @@
 // CONDITIONS OF ANY KIND, either express or implied. See the License for the
 // specific language governing permissions and limitations under the License.
 
-pub mod rollup_machine_manager {
-    tonic::include_proto!("cartesi_rollup_machine_manager");
+pub mod server_manager {
+    tonic::include_proto!("cartesi_server_manager");
 }
 
 pub mod cartesi_machine {

@@ -22,22 +22,22 @@ use crate::model::{
 };
 
 use super::proto::cartesi_machine::Void;
-use super::proto::rollup_machine_manager::rollup_machine_manager_server::RollupMachineManager;
-use super::proto::rollup_machine_manager::{
-    processed_input::ProcessedOneof, Address, AdvanceStateRequest, CompletionStatus,
-    EndSessionRequest, EpochState, FinishEpochRequest, GetEpochStatusRequest,
-    GetEpochStatusResponse, GetSessionStatusRequest, GetSessionStatusResponse, GetStatusResponse,
-    InputResult, InspectStateRequest, InspectStateResponse, Notice as GrpcNotice, ProcessedInput,
-    Report as GrpcReport, StartSessionRequest, TaintStatus, Voucher as GrpcVoucher,
+use super::proto::server_manager::{
+    processed_input::ProcessedOneof, server_manager_server::ServerManager, Address,
+    AdvanceStateRequest, CompletionStatus, EndSessionRequest, EpochState, FinishEpochRequest,
+    GetEpochStatusRequest, GetEpochStatusResponse, GetSessionStatusRequest,
+    GetSessionStatusResponse, GetStatusResponse, InputResult, InspectStateRequest,
+    InspectStateResponse, Notice as GrpcNotice, ProcessedInput, Report as GrpcReport,
+    StartSessionRequest, StartSessionResponse, TaintStatus, Voucher as GrpcVoucher,
 };
 use super::proto::versioning::{GetVersionResponse, SemanticVersion};
 
-pub struct RollupMachineManagerService {
+pub struct ServerManagerService {
     controller: Controller,
     sessions: SessionManager,
 }
 
-impl RollupMachineManagerService {
+impl ServerManagerService {
     pub fn new(controller: Controller) -> Self {
         Self {
             controller,
@@ -47,16 +47,16 @@ impl RollupMachineManagerService {
 }
 
 #[tonic::async_trait]
-impl RollupMachineManager for RollupMachineManagerService {
+impl ServerManager for ServerManagerService {
     async fn get_version(&self, _: Request<Void>) -> Result<Response<GetVersionResponse>, Status> {
         log::info!("received get_version");
         let response = GetVersionResponse {
             version: Some(SemanticVersion {
                 major: 0,
-                minor: 0,
+                minor: 1,
                 patch: 0,
                 pre_release: String::from(""),
-                build: String::from("mock-rollup-machine-manager"),
+                build: String::from("host-server-manager"),
             }),
         };
         Ok(Response::new(response))
@@ -65,7 +65,7 @@ impl RollupMachineManager for RollupMachineManagerService {
     async fn start_session(
         &self,
         request: Request<StartSessionRequest>,
-    ) -> Result<Response<Void>, Status> {
+    ) -> Result<Response<StartSessionResponse>, Status> {
         let request = request.into_inner();
         log::info!("received start_session with id={}", request.session_id);
         self.sessions
@@ -75,7 +75,8 @@ impl RollupMachineManager for RollupMachineManagerService {
                 self.controller.clone(),
             )
             .await?;
-        Ok(Response::new(Void {}))
+        let response = StartSessionResponse { config: None };
+        Ok(Response::new(response))
     }
 
     async fn end_session(
@@ -203,7 +204,7 @@ impl RollupMachineManager for RollupMachineManagerService {
 }
 
 struct SessionManager {
-    entry: Mutex<Option<SessionEntry>>, // The mock supports only a single session
+    entry: Mutex<Option<SessionEntry>>,
 }
 
 impl SessionManager {
@@ -225,7 +226,7 @@ impl SessionManager {
         let mut entry = self.entry.lock().await;
         match *entry {
             Some(_) => {
-                log::warn!("the mock only supports a single session");
+                log::warn!("the host-server-manager only supports a single session");
                 Err(Status::already_exists("session id is taken"))
             }
             None => {

@@ -10,15 +10,15 @@
 // CONDITIONS OF ANY KIND, either express or implied. See the License for the
 // specific language governing permissions and limitations under the License.
 
-mod machine_manager;
 mod proto;
+mod server_manager;
 
 use futures_util::FutureExt;
 use std::future::Future;
 use tonic::transport::Server;
 
-use machine_manager::RollupMachineManagerService;
-use proto::rollup_machine_manager::rollup_machine_manager_server::RollupMachineManagerServer;
+use proto::server_manager::server_manager_server::ServerManagerServer;
+use server_manager::ServerManagerService;
 
 use crate::config::Config;
 use crate::dapp_client::Controller;
@@ -30,13 +30,13 @@ pub async fn start_service<F: Future<Output = ()>>(
 ) -> Result<(), tonic::transport::Error> {
     let addr = format!(
         "{}:{}",
-        config.grpc_machine_manager_address, config.grpc_machine_manager_port
+        config.grpc_server_manager_address, config.grpc_server_manager_port
     )
     .parse()
     .expect("invalid config");
-    let service = RollupMachineManagerService::new(controller);
+    let service = ServerManagerService::new(controller);
     Server::builder()
-        .add_service(RollupMachineManagerServer::new(service))
+        .add_service(ServerManagerServer::new(service))
         .serve_with_shutdown(addr, signal.map(|_| ()))
         .await
 }

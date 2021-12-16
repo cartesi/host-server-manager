@@ -79,9 +79,8 @@ pub struct MockDAppError {}
 #[snafu(display("request not accepted when state is idle"))]
 pub struct InsertError {}
 
-/// State-machine that controls whether the Mock is processing an input (advancing the rollups
-/// epoch state) or idle.
-/// When processing an input, the Mock receives vouchers, notices, and reports until it receives a
+/// State-machine that controls whether the Server manager is advancing the epoch state or idle.
+/// When processing an input, the Server Manager receives vouchers, notices, and reports until it receives a
 /// finish request.
 pub struct Controller<D: DApp> {
     advance_tx: mpsc::Sender<AdvanceRequestWrapper<D>>,

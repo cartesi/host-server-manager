@@ -15,15 +15,15 @@ use structopt::StructOpt;
 const DEFAULT_ADDRESS: &str = "0.0.0.0";
 
 #[derive(StructOpt, Clone, Debug)]
-#[structopt(name = "mock-rollups-machine-manager")]
+#[structopt(name = "host-server-manager")]
 pub struct Config {
-    /// gRPC address of the Mock Rollups Machine Manager endpoint
+    /// gRPC address of the Server Manager endpoint
     #[structopt(long, env, default_value = DEFAULT_ADDRESS)]
-    pub grpc_machine_manager_address: String,
+    pub grpc_server_manager_address: String,
 
-    /// gRPC port of the Mock Rollups Machine Manager endpoint
+    /// gRPC port of the Server Manager endpoint
     #[structopt(long, env, default_value = "5000")]
-    pub grpc_machine_manager_port: u16,
+    pub grpc_server_manager_port: u16,
 
     /// HTTP address of the HTTP-Dispatcher endpoint
     #[structopt(long, env, default_value = DEFAULT_ADDRESS)]

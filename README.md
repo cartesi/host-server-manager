@@ -1,8 +1,9 @@
-# Mock Rollup Machine Manager
+# Host Server Manager
 
-This project simulates the gRPC API provided by the Rollups Machine Manager Container.
-Instead of instantiating a Cartesi Machine for the DApp, the Mock makes HTTP requests to a DApp that should be running in the host machine.
-This project also simulates the Inspect API provided by the Inspect Container.
+This project implements the gRPC Server Manager API.
+Different from the Server Manager, the Host Server Manager does not instantiate a Cartesi Server.
+Instead, it makes HTTP requests directly to a DApp running in the host machine.
+This project also simulates the Inspect HTTP API provided by the Inspect Container.
 
 ## Getting Started
 
@@ -19,7 +20,7 @@ git submodule update --init --recursive
 
 ## Running
 
-To run the mock, execute the command:
+To run the host-server-manager, execute the command:
 
 ```
 cargo run
@@ -27,7 +28,7 @@ cargo run
 
 ## Configuration
 
-It is possible to configure the mock behaviour passing CLI arguments and using environment variables.
+It is possible to configure the host-server-manager behaviour passing CLI arguments and using environment variables.
 Execute the following command to check the available options.
 
 ```

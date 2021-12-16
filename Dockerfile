@@ -14,8 +14,8 @@ FROM rust:1.57 as builder
 
 # Setup work directory
 WORKDIR /usr/src/
-RUN cargo new --bin mock-rollups-machine-manager
-WORKDIR /usr/src/mock-rollups-machine-manager
+RUN cargo new --bin host-server-manager
+WORKDIR /usr/src/host-server-manager
 
 # Install rustfmt (required by tonic when building grpc interfaces)
 RUN rustup component add rustfmt
@@ -26,7 +26,7 @@ COPY ./Cargo.toml ./Cargo.toml
 RUN cargo build --release
 
 # Build application
-RUN rm ./target/release/deps/mock_rollups_machine_manager*
+RUN rm ./target/release/deps/host_server_manager*
 RUN rm src/*.rs
 COPY ./src ./src
 COPY ./grpc-interfaces ./grpc-interfaces
@@ -36,5 +36,5 @@ RUN cargo install --path .
 # Build final image
 FROM debian:buster-slim
 RUN apt-get update && apt-get install -y libssl1.1 && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /usr/local/cargo/bin/mock-rollups-machine-manager /usr/local/bin/mock-rollups-machine-manager
-CMD ["mock-rollups-machine-manager"]
+COPY --from=builder /usr/local/cargo/bin/host-server-manager /usr/local/bin/host-server-manager
+CMD ["host-server-manager"]
