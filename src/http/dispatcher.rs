@@ -11,8 +11,8 @@
 // specific language governing permissions and limitations under the License.
 
 use actix_web::{
-    error::Result as HttpResult, middleware::Logger, web::Data, web::Json, App, HttpResponse,
-    HttpServer, Responder,
+    error, error::Result as HttpResult, middleware::Logger, web::Data, web::Json, App,
+    HttpResponse, HttpServer, Responder,
 };
 
 use crate::config::Config;
@@ -45,7 +45,11 @@ async fn voucher(
     controller: Data<Controller>,
 ) -> HttpResult<impl Responder> {
     let voucher: Voucher = voucher.into_inner().try_into()?;
-    let index = controller.insert_voucher(voucher).await?;
+    let rx = controller.insert_voucher(voucher).await;
+    let index = rx.await.map_err(|_| {
+        log::error!("sender dropped the channel");
+        error::ErrorInternalServerError("failed to insert voucher")
+    })??;
     let response = HttpIndexResponse { index };
     Ok(HttpResponse::Created().json(response))
 }
@@ -56,7 +60,11 @@ async fn notice(
     controller: Data<Controller>,
 ) -> HttpResult<impl Responder> {
     let notice: Notice = notice.into_inner().try_into()?;
-    let index = controller.insert_notice(notice).await?;
+    let rx = controller.insert_notice(notice).await;
+    let index = rx.await.map_err(|_| {
+        log::error!("sender dropped the channel");
+        error::ErrorInternalServerError("failed to insert notice")
+    })??;
     let response = HttpIndexResponse { index };
     Ok(HttpResponse::Created().json(response))
 }

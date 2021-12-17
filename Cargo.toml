@@ -23,7 +23,8 @@ tokio = { version = "1.14", features = ["macros", "time", "rt-multi-thread"] }
 tonic = "0.6"
 
 [dev-dependencies]
-mockall = "0.10"
+mockall = "0.11"
+rand = "0.8"
 
 [build-dependencies]
 tonic-build = "0.5"

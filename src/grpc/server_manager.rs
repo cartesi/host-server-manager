@@ -10,13 +10,11 @@
 // CONDITIONS OF ANY KIND, either express or implied. See the License for the
 // specific language governing permissions and limitations under the License.
 
-use async_trait::async_trait;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
 
-use crate::controller::AdvanceFinisher;
-use crate::dapp_client::{Controller, DAppClient, DAppError};
+use crate::dapp_client::Controller;
 use crate::model::{
     AdvanceMetadata, AdvanceRequest, AdvanceResult, FinishStatus, Notice, Report, Voucher,
 };
@@ -327,10 +325,26 @@ impl Session {
             .lock()
             .await
             .try_add_pending_input(current_input_index)?;
-        let finisher = Finisher::new(epoch.clone(), self.tainted.clone());
-        self.controller
-            .advance(advance_request, Box::new(finisher))
-            .await;
+        let rx = self.controller.advance(advance_request).await;
+        let epoch = epoch.clone();
+        let tainted = self.tainted.clone();
+        // Handle the advance response in another thread
+        tokio::spawn(async move {
+            match rx.await {
+                Ok(result) => match result {
+                    Ok(result) => {
+                        epoch.lock().await.add_processed_input(result);
+                    }
+                    Err(e) => {
+                        log::error!("something went wrong; tainting session");
+                        *tainted.lock().await = Some(Status::internal(e.to_string()));
+                    }
+                },
+                Err(_) => {
+                    log::error!("sender dropped the channel");
+                }
+            }
+        });
         Ok(())
     }
 
@@ -546,33 +560,6 @@ impl Epoch {
             Err(Status::invalid_argument("epoch still has processed inputs"))
         } else {
             Ok(())
-        }
-    }
-}
-
-#[derive(Debug)]
-struct Finisher {
-    epoch: Arc<Mutex<Epoch>>,
-    tainted: Arc<Mutex<Option<Status>>>,
-}
-
-impl Finisher {
-    fn new(epoch: Arc<Mutex<Epoch>>, tainted: Arc<Mutex<Option<Status>>>) -> Self {
-        Self { epoch, tainted }
-    }
-}
-
-#[async_trait]
-impl AdvanceFinisher<DAppClient> for Finisher {
-    async fn handle(&self, result: Result<AdvanceResult, DAppError>) {
-        match result {
-            Ok(result) => {
-                self.epoch.lock().await.add_processed_input(result);
-            }
-            Err(e) => {
-                log::error!("something went wrong; tainting session");
-                *self.tainted.lock().await = Some(Status::internal(e.to_string()));
-            }
         }
     }
 }

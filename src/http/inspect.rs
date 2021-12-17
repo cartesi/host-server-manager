@@ -11,8 +11,8 @@
 // specific language governing permissions and limitations under the License.
 
 use actix_web::{
-    error::Result as HttpResult, middleware::Logger, web::Data, web::Path, App, HttpResponse,
-    HttpServer, Responder,
+    error, error::Result as HttpResult, middleware::Logger, web::Data, web::Path, App,
+    HttpResponse, HttpServer, Responder,
 };
 
 use crate::config::Config;
@@ -44,7 +44,11 @@ async fn inspect(
 ) -> HttpResult<impl Responder> {
     let payload = conversions::decode_ethereum_binary(payload.as_ref())?;
     let request = InspectRequest { payload };
-    let reports = controller.inspect(request).await?;
+    let rx = controller.inspect(request).await;
+    let reports = rx.await.map_err(|_| {
+        log::error!("sender dropped the channel");
+        error::ErrorInternalServerError("failed to send inspect request")
+    })??;
     let reports = reports.into_iter().map(HttpReport::from).collect();
     let response = HttpInspectResponse { reports };
     Ok(HttpResponse::Ok().json(response))

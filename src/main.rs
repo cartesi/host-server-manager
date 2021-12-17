@@ -17,6 +17,7 @@ mod dapp_client;
 mod grpc;
 mod http;
 mod model;
+mod sync_request;
 
 use futures_util::FutureExt;
 use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc};
@@ -24,7 +25,7 @@ use structopt::StructOpt;
 use tokio::sync::oneshot;
 
 use config::Config;
-use dapp_client::DAppClient;
+use dapp_client::{Controller, DAppClient};
 
 #[actix_web::main]
 async fn main() {
@@ -35,11 +36,7 @@ async fn main() {
     log::info!("{:#?}", config);
 
     let dapp_client = DAppClient::new(&config);
-    let (controller, controller_service) = controller::new(dapp_client);
-    let controller_service = tokio::spawn(async {
-        controller_service.run().await;
-        log::info!("controller service terminated successfully");
-    });
+    let controller = Controller::new(dapp_client);
     let http_service_running = Arc::new(AtomicBool::new(true));
     let (grpc_shutdown_tx, grpc_shutdown_rx) = oneshot::channel::<()>();
     let grpc_service = {
@@ -66,14 +63,13 @@ async fn main() {
     http_service_running.store(false, Ordering::Relaxed);
 
     // Shutdown the other services
-    controller.shutdown().await;
-    controller_service
-        .await
-        .expect("failed to shutdown the controller service");
-    grpc_shutdown_tx
-        .send(())
-        .expect("failed to send shutdown signal to grpc");
-    grpc_service
-        .await
-        .expect("failed to shutdown the grpc service");
+    if let Err(e) = controller.shutdown().await.await {
+        log::error!("failed to shutdown controller ({})", e);
+    }
+    if let Err(_) = grpc_shutdown_tx.send(()) {
+        log::error!("failed to send the shutdown signal to grpc");
+    }
+    if let Err(e) = grpc_service.await {
+        log::error!("failed to shutdown the grpc service ({})", e);
+    }
 }
