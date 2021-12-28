@@ -12,7 +12,7 @@
 
 use cucumber::{then, when};
 
-use crate::world::{TestWorld, CARTESI_MACHINE_FILES_ENV};
+use crate::world::TestWorld;
 use host_server_manager_tests::generate_default_start_session_request;
 use host_server_manager_tests::grpc::proto::host_server_manager::StartSessionResponse;
 use host_server_manager_tests::utils::error_name_to_code;
@@ -26,8 +26,7 @@ pub async fn do_start_valid_default_session(
             panic!("{:?}", e);
         }
     }
-    let files_dir = TestWorld::get_var(CARTESI_MACHINE_FILES_ENV);
-    let request = generate_default_start_session_request(&files_dir, &session_id);
+    let request = generate_default_start_session_request("/tmp", &session_id);
     let response = world
         .grpc_client
         .as_mut()

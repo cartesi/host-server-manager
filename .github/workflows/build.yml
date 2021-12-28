@@ -43,24 +43,28 @@ jobs:
         with:
           name: host-server-manager
 
-      - name: Build echo dapp
-        run: cd tests/echo-dapp && cargo build
+      - name: Fix server manager permissions
+        run: chmod 755 $(pwd)/host-server-manager
+
+      - name: Install nightly rust
+        run: rustup toolchain install nightly
 
       - name: Build test dapp
-        run: cd tests/test-backend && cargo build
+        run: |
+          cd tests/test-backend
+          cargo build
 
-      - name: Fix permissions
-        run: chmod 755 $(pwd)/host-server-manager
+      - name: Build echo dapp
+        run: |
+          cd tests/machine-emulator-tools/linux/rollup/http/echo-dapp
+          cargo +nightly build
 
       - name: Run tests
         run: |
           export CARTESI_HOST_SERVER_MANAGER_BIN=$(pwd)/host-server-manager
-          cd tests
-          export CARTESI_DAPP_BACKEND_BIN=$(pwd)/test-backend/target/debug/test-backend
-          export CARTESI_ECHO_DAPP_BACKEND_BIN=$(pwd)/echo-dapp/target/debug/echo-dapp
-          export CARTESI_MACHINE_FILES=$(pwd)/test-files
-          mkdir -p $CARTESI_MACHINE_FILES
-          cd integration
+          export CARTESI_DAPP_BACKEND_BIN=$(pwd)/tests/test-backend/target/debug/test-backend
+          export CARTESI_ECHO_DAPP_BACKEND_BIN=$(pwd)/tests/machine-emulator-tools/linux/rollup/http/echo-dapp/target/debug/echo-dapp
+          cd tests/integration
           cargo test
 
   docker:

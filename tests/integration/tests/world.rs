@@ -30,7 +30,6 @@ pub const DAPP_HTTP_PORT_VAR: &'static str = "DAPP_HTTP_PORT";
 pub const MANAGER_BIN_VAR: &'static str = "CARTESI_HOST_SERVER_MANAGER_BIN";
 pub const BACKEND_BIN_VAR: &'static str = "CARTESI_DAPP_BACKEND_BIN";
 pub const ECHO_BIN_VAR: &'static str = "CARTESI_ECHO_DAPP_BACKEND_BIN";
-pub const CARTESI_MACHINE_FILES_ENV: &'static str = "CARTESI_MACHINE_FILES";
 
 // these variables to be passed to the test dapp backend
 pub const DAPP_BACKEND_ADDRESS_ENV: &'static str = "CARTESI_DAPP_BACKEND_ADDRESS";
