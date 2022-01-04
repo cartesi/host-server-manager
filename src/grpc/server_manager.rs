@@ -96,20 +96,19 @@ impl ServerManager for ServerManagerService {
         let metadata = request
             .input_metadata
             .ok_or(Status::invalid_argument("missing metadata from request"))?;
-        let sender = metadata
+        let msg_sender = metadata
             .msg_sender
-            .ok_or(Status::invalid_argument("missing msg_sender from metadata"))?;
-        let address = sender
+            .ok_or(Status::invalid_argument("missing msg_sender from metadata"))?
             .data
             .try_into()
             .or(Err(Status::invalid_argument("invalid address")))?;
         let advance_request = AdvanceRequest {
             metadata: AdvanceMetadata {
-                address,
-                epoch_number: metadata.epoch_index,
-                input_number: metadata.input_index,
+                msg_sender,
+                epoch_index: metadata.epoch_index,
+                input_index: metadata.input_index,
                 block_number: metadata.block_number,
-                timestamp: metadata.time_stamp,
+                time_stamp: metadata.time_stamp,
             },
             payload: request.input_payload,
         };

@@ -24,11 +24,11 @@ pub struct SyncRequest<T: Send + Sync, U: Send + Sync> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdvanceMetadata {
-    pub address: String,
-    pub epoch_number: u64,
-    pub input_number: u64,
+    pub msg_sender: String,
+    pub epoch_index: u64,
+    pub input_index: u64,
     pub block_number: u64,
-    pub timestamp: u64,
+    pub time_stamp: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,11 +96,11 @@ impl Model {
         _finish_channel: mpsc::Sender<AdvanceResult>,
     ) {
         eprintln!("Got advance request");
-        eprintln!("msg_sender: {}", &request.metadata.address.to_lowercase()[2..]);
+        eprintln!("msg_sender: {}", &request.metadata.msg_sender.to_lowercase()[2..]);
         eprintln!("block_number: {}", request.metadata.block_number);
-        eprintln!("timestamp: {}", request.metadata.timestamp);
-        eprintln!("epoch_index: {}", request.metadata.epoch_number);
-        eprintln!("input_index: {}", request.metadata.input_number);
+        eprintln!("timestamp: {}", request.metadata.time_stamp);
+        eprintln!("epoch_index: {}", request.metadata.epoch_index);
+        eprintln!("input_index: {}", request.metadata.input_index);
         eprintln!("input_payload: {}", &request.payload.to_lowercase()[2..]);
     }
     pub async fn inspect(&self, request: InspectRequest) -> InspectResult {

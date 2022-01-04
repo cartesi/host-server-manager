@@ -83,11 +83,11 @@ async fn do_send_machine_manager_advance(request_data: &Vec<Vec<String>>, world:
 
 #[derive(Serialize)]
 pub struct AdvanceHttpMetadata {
-    pub address: String,
-    pub epoch_number: u64,
-    pub input_number: u64,
+    pub msg_sender: String,
+    pub epoch_index: u64,
+    pub input_index: u64,
     pub block_number: u64,
-    pub timestamp: u64,
+    pub time_stamp: u64,
 }
 
 #[derive(Serialize)]
@@ -99,17 +99,17 @@ pub struct AdvanceHttpRequest {
 async fn do_send_echo_dapp_advance(request_data: &Vec<Vec<String>>, world: &mut TestWorld) {
     let request = AdvanceHttpRequest {
         metadata: AdvanceHttpMetadata {
-            address: request_data[0][1].clone(),
+            msg_sender: request_data[0][1].clone(),
             block_number: request_data[1][1]
                 .parse::<u64>()
                 .expect("Invalid u64 test data"),
-            timestamp: request_data[2][1]
+            time_stamp: request_data[2][1]
                 .parse::<u64>()
                 .expect("Invalid u64 test data"),
-            epoch_number: request_data[3][1]
+            epoch_index: request_data[3][1]
                 .parse::<u64>()
                 .expect("Invalid u64 test data"),
-            input_number: request_data[4][1]
+            input_index: request_data[4][1]
                 .parse::<u64>()
                 .expect("Invalid u64 test data"),
         },

@@ -18,21 +18,21 @@ use crate::model::*;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HttpAdvanceMetadata {
-    pub address: String,
-    pub epoch_number: u64,
-    pub input_number: u64,
+    pub msg_sender: String,
+    pub epoch_index: u64,
+    pub input_index: u64,
     pub block_number: u64,
-    pub timestamp: u64,
+    pub time_stamp: u64,
 }
 
 impl From<AdvanceMetadata> for HttpAdvanceMetadata {
     fn from(metadata: AdvanceMetadata) -> HttpAdvanceMetadata {
         HttpAdvanceMetadata {
-            address: conversions::encode_ethereum_binary(&metadata.address),
-            epoch_number: metadata.epoch_number,
-            input_number: metadata.input_number,
+            msg_sender: conversions::encode_ethereum_binary(&metadata.msg_sender),
+            epoch_index: metadata.epoch_index,
+            input_index: metadata.input_index,
             block_number: metadata.block_number,
-            timestamp: metadata.timestamp,
+            time_stamp: metadata.time_stamp,
         }
     }
 }

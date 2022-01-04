@@ -12,11 +12,11 @@
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdvanceMetadata {
-    pub address: [u8; 20],
-    pub epoch_number: u64,
-    pub input_number: u64,
+    pub msg_sender: [u8; 20],
+    pub epoch_index: u64,
+    pub input_index: u64,
     pub block_number: u64,
-    pub timestamp: u64,
+    pub time_stamp: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

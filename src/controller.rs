@@ -671,11 +671,11 @@ mod tests {
     fn mock_advance_request() -> AdvanceRequest {
         AdvanceRequest {
             metadata: AdvanceMetadata {
-                address: rand::random(),
-                epoch_number: rand::random(),
-                input_number: rand::random(),
+                msg_sender: rand::random(),
+                epoch_index: rand::random(),
+                input_index: rand::random(),
                 block_number: rand::random(),
-                timestamp: rand::random(),
+                time_stamp: rand::random(),
             },
             payload: rand::random::<[u8; 32]>().into(),
         }
