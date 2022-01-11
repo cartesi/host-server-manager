@@ -424,12 +424,12 @@ impl<D: DApp> State for AdvanceUntilFinish<D> {
             }
             Some(status) = self.channels.finish_rx.recv() => {
                 log::info!("processing finish request");
-                let result = AdvanceResult {
+                let result = AdvanceResult::new(
                     status,
-                    vouchers: self.vouchers,
-                    notices: self.notices,
-                    reports: self.reports,
-                };
+                    self.vouchers,
+                    self.notices,
+                    self.reports,
+                );
                 if let Err(_) = self.advance_tx.send(Ok(result)) {
                     log::error!("failed to send advance result (channel dropped)");
                 }
@@ -606,12 +606,12 @@ mod tests {
         let (mut dapp, mut sequence) = setup();
         let advance = expect_advance_request(&mut dapp, &mut sequence).await;
         let controller = Controller::new(dapp);
-        let expected_result = AdvanceResult {
-            status: FinishStatus::Reject,
-            vouchers: vec![mock_voucher(), mock_voucher()],
-            notices: vec![mock_notice(), mock_notice()],
-            reports: vec![mock_report(), mock_report()],
-        };
+        let expected_result = AdvanceResult::new(
+            FinishStatus::Reject,
+            vec![mock_voucher(), mock_voucher()],
+            vec![mock_notice(), mock_notice()],
+            vec![mock_report(), mock_report()],
+        );
         let advance_rx = controller.advance(advance.request).await;
         advance.received.notified().await;
         advance.response_tx.send(Ok(())).unwrap();
@@ -639,12 +639,12 @@ mod tests {
         let (mut dapp, mut sequence) = setup();
         let advance = expect_advance_request(&mut dapp, &mut sequence).await;
         let controller = Controller::new(dapp);
-        let expected_result = AdvanceResult {
-            status: FinishStatus::Reject,
-            vouchers: vec![mock_voucher(), mock_voucher()],
-            notices: vec![mock_notice(), mock_notice()],
-            reports: vec![mock_report(), mock_report()],
-        };
+        let expected_result = AdvanceResult::new(
+            FinishStatus::Reject,
+            vec![mock_voucher(), mock_voucher()],
+            vec![mock_notice(), mock_notice()],
+            vec![mock_report(), mock_report()],
+        );
         let advance_rx = controller.advance(advance.request).await;
         advance.received.notified().await;
         for (expected_id, voucher) in expected_result.vouchers.iter().enumerate() {
@@ -682,16 +682,11 @@ mod tests {
     }
 
     fn mock_voucher() -> Voucher {
-        Voucher {
-            address: rand::random(),
-            payload: rand::random::<[u8; 32]>().into(),
-        }
+        Voucher::new(rand::random(), rand::random::<[u8; 32]>().into())
     }
 
     fn mock_notice() -> Notice {
-        Notice {
-            payload: rand::random::<[u8; 32]>().into(),
-        }
+        Notice::new(rand::random::<[u8; 32]>().into())
     }
 
     fn mock_report() -> Report {
@@ -701,12 +696,7 @@ mod tests {
     }
 
     fn mock_result(status: FinishStatus) -> AdvanceResult {
-        AdvanceResult {
-            status,
-            vouchers: vec![],
-            notices: vec![],
-            reports: vec![],
-        }
+        AdvanceResult::new(status, vec![], vec![], vec![])
     }
 
     struct MockAdvance {

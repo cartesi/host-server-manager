@@ -14,9 +14,13 @@ mod config;
 mod controller;
 mod conversions;
 mod dapp_client;
+mod driver;
 mod grpc;
+mod hash;
 mod http;
+mod merkle_tree;
 mod model;
+mod proofs;
 mod sync_request;
 
 use futures_util::FutureExt;

@@ -15,11 +15,16 @@ use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
 
 use crate::dapp_client::Controller;
+use crate::hash::Hash;
+use crate::merkle_tree::{complete::Tree, proof::Proof, Error as MerkleTreeError};
 use crate::model::{
     AdvanceMetadata, AdvanceRequest, AdvanceResult, FinishStatus, Notice, Report, Voucher,
 };
+use crate::proofs::compute_proofs;
 
-use super::proto::cartesi_machine::Void;
+use super::proto::cartesi_machine::{
+    machine_request::MachineOneof, Hash as GrpcHash, MerkleTreeProof as GrpcMerkleTreeProof, Void,
+};
 use super::proto::server_manager::{
     processed_input::ProcessedOneof, server_manager_server::ServerManager, Address,
     AdvanceStateRequest, CompletionStatus, EndSessionRequest, EpochState, FinishEpochRequest,
@@ -66,11 +71,37 @@ impl ServerManager for ServerManagerService {
     ) -> Result<Response<StartSessionResponse>, Status> {
         let request = request.into_inner();
         log::info!("received start_session with id={}", request.session_id);
+        let machine_oneof = request
+            .machine
+            .ok_or(Status::invalid_argument("missing machine from request"))?
+            .machine_oneof
+            .ok_or(Status::invalid_argument(
+                "missing machine_oneof from machine",
+            ))?;
+        let memory_range_config = match machine_oneof {
+            MachineOneof::Directory(_) => {
+                log::warn!("loading machine from directory; ignoring config");
+                MemoryRangeConfig::new(0, 0)
+            }
+            MachineOneof::Config(config) => {
+                let rollup = config
+                    .rollup
+                    .ok_or(Status::invalid_argument("missing rollup from config"))?;
+                let voucher_hashes = rollup.voucher_hashes.ok_or(Status::invalid_argument(
+                    "missing voucher_hashes from rollup",
+                ))?;
+                let notice_hashes = rollup.notice_hashes.ok_or(Status::invalid_argument(
+                    "missing notice_hashes from rollup",
+                ))?;
+                MemoryRangeConfig::new(voucher_hashes.start as usize, notice_hashes.start as usize)
+            }
+        };
         self.sessions
             .try_set_session(
                 request.session_id,
                 request.active_epoch_index,
                 self.controller.clone(),
+                memory_range_config,
             )
             .await?;
         let response = StartSessionResponse { config: None };
@@ -222,6 +253,7 @@ impl SessionManager {
         session_id: String,
         active_epoch_index: u64,
         controller: Controller,
+        memory_range_config: MemoryRangeConfig,
     ) -> Result<(), Status> {
         if session_id == "" {
             return Err(Status::invalid_argument("session id is empty"));
@@ -237,6 +269,7 @@ impl SessionManager {
                     session_id,
                     active_epoch_index,
                     controller,
+                    memory_range_config,
                 ));
                 Ok(())
             }
@@ -279,10 +312,19 @@ struct SessionEntry {
 }
 
 impl SessionEntry {
-    fn new(id: String, active_epoch_index: u64, controller: Controller) -> Self {
+    fn new(
+        id: String,
+        active_epoch_index: u64,
+        controller: Controller,
+        memory_range_config: MemoryRangeConfig,
+    ) -> Self {
         Self {
             id,
-            session: Arc::new(Mutex::new(Session::new(active_epoch_index, controller))),
+            session: Arc::new(Mutex::new(Session::new(
+                active_epoch_index,
+                controller,
+                memory_range_config,
+            ))),
         }
     }
 
@@ -300,18 +342,27 @@ impl SessionEntry {
 }
 
 struct Session {
-    controller: Controller,
     active_epoch_index: u64,
+    controller: Controller,
+    memory_range_config: MemoryRangeConfig,
     epochs: HashMap<u64, Arc<Mutex<Epoch>>>,
     tainted: Arc<Mutex<Option<Status>>>,
 }
 
 impl Session {
-    fn new(active_epoch_index: u64, controller: Controller) -> Self {
+    fn new(
+        active_epoch_index: u64,
+        controller: Controller,
+        memory_range_config: MemoryRangeConfig,
+    ) -> Self {
+        let epoch = Arc::new(Mutex::new(Epoch::new(memory_range_config.clone())));
+        let mut epochs = HashMap::new();
+        epochs.insert(active_epoch_index, epoch);
         Self {
-            controller,
             active_epoch_index,
-            epochs: HashMap::from([(active_epoch_index, Arc::new(Mutex::new(Epoch::new())))]),
+            controller,
+            memory_range_config,
+            epochs,
             tainted: Arc::new(Mutex::new(None)),
         }
     }
@@ -338,7 +389,10 @@ impl Session {
             match rx.await {
                 Ok(result) => match result {
                     Ok(result) => {
-                        epoch.lock().await.add_processed_input(result);
+                        if let Err(e) = epoch.lock().await.add_processed_input(result) {
+                            log::error!("failed to add processed input; tainting session");
+                            *tainted.lock().await = Some(e);
+                        }
                     }
                     Err(e) => {
                         log::error!("something went wrong; tainting session");
@@ -366,8 +420,8 @@ impl Session {
             .await
             .try_finish(processed_input_count)?;
         self.active_epoch_index += 1;
-        self.epochs
-            .insert(self.active_epoch_index, Arc::new(Mutex::new(Epoch::new())));
+        let epoch = Arc::new(Mutex::new(Epoch::new(self.memory_range_config.clone())));
+        self.epochs.insert(self.active_epoch_index, epoch);
         Ok(())
     }
 
@@ -449,32 +503,74 @@ impl Session {
     }
 }
 
+/// The keccak output has 32 bytes
+const LOG2_KECCAK_SIZE: usize = 5;
+
+/// The epoch tree has 2^32 leafs
+const LOG2_ROOT_SIZE: usize = 32 + LOG2_KECCAK_SIZE;
+
+/// The max number of inputs in an epoch is limited by the size of the merkle tree
+const MAX_INPUTS_IN_EPOCH: usize = 1 << (LOG2_ROOT_SIZE - LOG2_KECCAK_SIZE);
+
 #[derive(Debug)]
 struct Epoch {
     state: EpochState,
     pending_inputs: u64,
     processed_inputs: Vec<AdvanceResult>,
+    vouchers_tree: Tree,
+    notices_tree: Tree,
+    memory_range_config: MemoryRangeConfig,
 }
 
 impl Epoch {
-    fn new() -> Self {
+    fn new(memory_range_config: MemoryRangeConfig) -> Self {
         Self {
             state: EpochState::Active,
             pending_inputs: 0,
             processed_inputs: vec![],
+            vouchers_tree: Tree::new(LOG2_ROOT_SIZE, LOG2_KECCAK_SIZE, LOG2_KECCAK_SIZE)
+                .expect("cannot fail"),
+            notices_tree: Tree::new(LOG2_ROOT_SIZE, LOG2_KECCAK_SIZE, LOG2_KECCAK_SIZE)
+                .expect("cannot fail"),
+            memory_range_config,
         }
     }
 
     fn try_add_pending_input(&mut self, current_input_index: u64) -> Result<(), Status> {
         self.check_active()?;
         self.check_current_input_index(current_input_index)?;
+        self.check_input_limit()?;
         self.pending_inputs += 1;
         Ok(())
     }
 
-    fn add_processed_input(&mut self, input: AdvanceResult) {
+    fn add_processed_input(&mut self, mut result: AdvanceResult) -> Result<(), Status> {
+        // Compute proofs and update vouchers and notices trees
+        if result.status == FinishStatus::Accept {
+            let voucher_root = compute_proofs(
+                &mut result.vouchers,
+                self.memory_range_config.vouchers_start,
+            )?;
+            result.voucher_root = Some(voucher_root.clone());
+            self.vouchers_tree.push(voucher_root)?;
+            let notice_root =
+                compute_proofs(&mut result.notices, self.memory_range_config.notices_start)?;
+            result.notice_root = Some(notice_root.clone());
+            self.notices_tree.push(notice_root)?;
+        } else {
+            self.vouchers_tree.push(Hash::default())?;
+            self.notices_tree.push(Hash::default())?;
+        }
+        // Setup proofs for the current result
+        let address = (self.vouchers_tree.len() - 1) << LOG2_KECCAK_SIZE;
+        result.voucher_hashes_in_epoch =
+            Some(self.vouchers_tree.get_proof(address, LOG2_KECCAK_SIZE)?);
+        result.notice_hashes_in_epoch =
+            Some(self.notices_tree.get_proof(address, LOG2_KECCAK_SIZE)?);
+        // Add result to processed inputs
         self.pending_inputs -= 1;
-        self.processed_inputs.push(input);
+        self.processed_inputs.push(result);
+        Ok(())
     }
 
     fn try_finish(&mut self, processed_input_count: u64) -> Result<(), Status> {
@@ -482,6 +578,14 @@ impl Epoch {
         self.check_pending_inputs()?;
         self.check_processed_inputs(processed_input_count)?;
         self.state = EpochState::Finished;
+        // Re-generate all proofs for processed inputs
+        for (i, result) in self.processed_inputs.iter_mut().enumerate() {
+            let address = i << LOG2_KECCAK_SIZE;
+            result.voucher_hashes_in_epoch =
+                Some(self.vouchers_tree.get_proof(address, LOG2_KECCAK_SIZE)?);
+            result.notice_hashes_in_epoch =
+                Some(self.notices_tree.get_proof(address, LOG2_KECCAK_SIZE)?);
+        }
         Ok(())
     }
 
@@ -496,8 +600,12 @@ impl Epoch {
             epoch_index,
             state: self.state as i32,
             most_recent_machine_hash: None,
-            most_recent_vouchers_epoch_root_hash: None,
-            most_recent_notices_epoch_root_hash: None,
+            most_recent_vouchers_epoch_root_hash: Some(
+                self.vouchers_tree.get_root_hash().clone().into(),
+            ),
+            most_recent_notices_epoch_root_hash: Some(
+                self.notices_tree.get_root_hash().clone().into(),
+            ),
             processed_inputs: self
                 .processed_inputs
                 .iter()
@@ -567,6 +675,31 @@ impl Epoch {
             Ok(())
         }
     }
+
+    fn check_input_limit(&self) -> Result<(), Status> {
+        if self.pending_inputs + self.get_num_processed_inputs() + 1 >= MAX_INPUTS_IN_EPOCH as u64 {
+            Err(Status::invalid_argument(
+                "reached max number of inputs per epoch",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct MemoryRangeConfig {
+    vouchers_start: usize,
+    notices_start: usize,
+}
+
+impl MemoryRangeConfig {
+    fn new(vouchers_start: usize, notices_start: usize) -> Self {
+        Self {
+            vouchers_start,
+            notices_start,
+        }
+    }
 }
 
 impl From<(usize, AdvanceResult)> for ProcessedInput {
@@ -574,9 +707,9 @@ impl From<(usize, AdvanceResult)> for ProcessedInput {
         let processed_oneof = Some(match result.status {
             FinishStatus::Accept => ProcessedOneof::Result(InputResult {
                 voucher_hashes_in_machine: None,
-                vouchers: convert_vector(result.vouchers),
+                vouchers: result.vouchers.into_iter().map(GrpcVoucher::from).collect(),
                 notice_hashes_in_machine: None,
-                notices: convert_vector(result.notices),
+                notices: result.notices.into_iter().map(GrpcNotice::from).collect(),
             }),
             FinishStatus::Reject => {
                 ProcessedOneof::SkipReason(CompletionStatus::RejectedByMachine as i32)
@@ -585,9 +718,11 @@ impl From<(usize, AdvanceResult)> for ProcessedInput {
         ProcessedInput {
             input_index: index as u64,
             most_recent_machine_hash: None,
-            voucher_hashes_in_epoch: None,
-            notice_hashes_in_epoch: None,
-            reports: convert_vector(result.reports),
+            voucher_hashes_in_epoch: result
+                .voucher_hashes_in_epoch
+                .map(GrpcMerkleTreeProof::from),
+            notice_hashes_in_epoch: result.notice_hashes_in_epoch.map(GrpcMerkleTreeProof::from),
+            reports: result.reports.into_iter().map(GrpcReport::from).collect(),
             processed_oneof,
         }
     }
@@ -596,12 +731,14 @@ impl From<(usize, AdvanceResult)> for ProcessedInput {
 impl From<Voucher> for GrpcVoucher {
     fn from(voucher: Voucher) -> GrpcVoucher {
         GrpcVoucher {
-            keccak: None,
+            keccak: Some(voucher.keccak.into()),
             address: Some(Address {
                 data: voucher.address.into(),
             }),
             payload: voucher.payload,
-            keccak_in_voucher_hashes: None,
+            keccak_in_voucher_hashes: voucher
+                .keccak_in_voucher_hashes
+                .map(GrpcMerkleTreeProof::from),
         }
     }
 }
@@ -609,9 +746,11 @@ impl From<Voucher> for GrpcVoucher {
 impl From<Notice> for GrpcNotice {
     fn from(notice: Notice) -> GrpcNotice {
         GrpcNotice {
-            keccak: None,
+            keccak: Some(notice.keccak.into()),
             payload: notice.payload,
-            keccak_in_notice_hashes: None,
+            keccak_in_notice_hashes: notice
+                .keccak_in_notice_hashes
+                .map(GrpcMerkleTreeProof::from),
         }
     }
 }
@@ -624,9 +763,34 @@ impl From<Report> for GrpcReport {
     }
 }
 
-fn convert_vector<T, U>(from: Vec<T>) -> Vec<U>
-where
-    U: From<T>,
-{
-    from.into_iter().map(|item| item.into()).collect()
+impl From<Hash> for GrpcHash {
+    fn from(hash: Hash) -> GrpcHash {
+        GrpcHash { data: hash.into() }
+    }
+}
+
+impl From<Proof> for GrpcMerkleTreeProof {
+    fn from(proof: Proof) -> GrpcMerkleTreeProof {
+        GrpcMerkleTreeProof {
+            target_address: proof.target_address as u64,
+            log2_target_size: proof.log2_target_size as u64,
+            target_hash: Some(proof.target_hash.into()),
+            log2_root_size: proof.log2_root_size as u64,
+            root_hash: Some(proof.root_hash.into()),
+            sibling_hashes: proof
+                .sibling_hashes
+                .into_iter()
+                .map(GrpcHash::from)
+                .collect(),
+        }
+    }
+}
+
+impl From<MerkleTreeError> for Status {
+    fn from(e: MerkleTreeError) -> Status {
+        Status::internal(format!(
+            "unexpected error when updating merkle tree ({})",
+            e
+        ))
+    }
 }

@@ -66,10 +66,10 @@ pub struct HttpVoucher {
 impl TryFrom<HttpVoucher> for Voucher {
     type Error = VoucherDecodeError;
     fn try_from(voucher: HttpVoucher) -> Result<Voucher, VoucherDecodeError> {
-        Ok(Voucher {
-            address: conversions::decode_ethereum_binary(&voucher.address)?.try_into()?,
-            payload: conversions::decode_ethereum_binary(&voucher.payload)?,
-        })
+        Ok(Voucher::new(
+            conversions::decode_ethereum_binary(&voucher.address)?.try_into()?,
+            conversions::decode_ethereum_binary(&voucher.payload)?,
+        ))
     }
 }
 
@@ -101,9 +101,9 @@ pub struct HttpNotice {
 impl TryFrom<HttpNotice> for Notice {
     type Error = DecodeError;
     fn try_from(notice: HttpNotice) -> Result<Notice, DecodeError> {
-        Ok(Notice {
-            payload: conversions::decode_ethereum_binary(&notice.payload)?,
-        })
+        Ok(Notice::new(conversions::decode_ethereum_binary(
+            &notice.payload,
+        )?))
     }
 }
 
