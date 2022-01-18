@@ -22,16 +22,8 @@ pub struct Config {
     pub grpc_server_manager_address: String,
 
     /// gRPC port of the Server Manager endpoint
-    #[structopt(long, env, default_value = "5000")]
-    pub grpc_server_manager_port: u16,
-
-    /// HTTP address of the HTTP-Dispatcher endpoint
-    #[structopt(long, env, default_value = DEFAULT_ADDRESS)]
-    pub http_dispatcher_address: String,
-
-    /// HTTP port of the HTTP-Dispatcher endpoint
     #[structopt(long, env, default_value = "5001")]
-    pub http_dispatcher_port: u16,
+    pub grpc_server_manager_port: u16,
 
     /// HTTP address of the Inspect endpoint
     #[structopt(long, env, default_value = DEFAULT_ADDRESS)]
@@ -48,4 +40,12 @@ pub struct Config {
     /// HTTP port of the DApp backend
     #[structopt(long, env, default_value = "5003")]
     pub dapp_http_port: u16,
+
+    /// HTTP address of the HTTP-Dispatcher endpoint
+    #[structopt(long, env, default_value = DEFAULT_ADDRESS)]
+    pub http_dispatcher_address: String,
+
+    /// HTTP port of the HTTP-Dispatcher endpoint
+    #[structopt(long, env, default_value = "5004")]
+    pub http_dispatcher_port: u16,
 }
