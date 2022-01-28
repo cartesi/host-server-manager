@@ -22,15 +22,65 @@ jobs:
       - name: Run tests
         run: cargo test
 
-      - name: Upload manager
+      - name: Upload host-server-manager
         uses: actions/upload-artifact@master
         with:
           name: host-server-manager
           path: target/debug/host-server-manager
 
+  build-test-backend:
+    name: Build test-backend
+    runs-on: ubuntu-20.04
+    env:
+      RUSTFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: recursive
+          token: ${{ secrets.CI_TOKEN }}
+
+      - name: Verify format
+        run: |
+          cd tests/test-backend
+          cargo fmt -- --check
+
+      - name: Build test backend
+        run: |
+          cd tests/test-backend
+          cargo build --release
+
+      - name: Upload test-backend
+        uses: actions/upload-artifact@master
+        with:
+          name: test-backend
+          path: tests/test-backend/target/release/test-backend
+
+  build-echo-dapp:
+    name: Build echo dapp
+    runs-on: ubuntu-20.04
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: recursive
+          token: ${{ secrets.CI_TOKEN }}
+
+      - name: Install nightly rust
+        run: rustup toolchain install nightly
+
+      - name: Build echo dapp
+        run: |
+          cd tests/machine-emulator-tools/linux/rollup/http/echo-dapp
+          cargo +nightly build --release
+
+      - name: Upload echo-dapp
+        uses: actions/upload-artifact@master
+        with:
+          name: echo-dapp
+          path: tests/machine-emulator-tools/linux/rollup/http/echo-dapp/target/release/echo-dapp
+
   integration:
     name: Integration testing
-    needs: build
+    needs: [build, build-echo-dapp, build-test-backend]
     runs-on: ubuntu-20.04
     steps:
       - uses: actions/checkout@v2
@@ -43,27 +93,27 @@ jobs:
         with:
           name: host-server-manager
 
-      - name: Fix server manager permissions
-        run: chmod 755 $(pwd)/host-server-manager
+      - name: Download test-backend
+        uses: actions/download-artifact@master
+        with:
+          name: test-backend
 
-      - name: Install nightly rust
-        run: rustup toolchain install nightly
+      - name: Download echo-dapp
+        uses: actions/download-artifact@master
+        with:
+          name: echo-dapp
 
-      - name: Build test dapp
+      - name: Fix permissions
         run: |
-          cd tests/test-backend
-          cargo build
-
-      - name: Build echo dapp
-        run: |
-          cd tests/machine-emulator-tools/linux/rollup/http/echo-dapp
-          cargo +nightly build
+          chmod 755 $(pwd)/host-server-manager
+          chmod 755 $(pwd)/echo-dapp
+          chmod 755 $(pwd)/test-backend
 
       - name: Run tests
         run: |
           export CARTESI_HOST_SERVER_MANAGER_BIN=$(pwd)/host-server-manager
-          export CARTESI_DAPP_BACKEND_BIN=$(pwd)/tests/test-backend/target/debug/test-backend
-          export CARTESI_ECHO_DAPP_BACKEND_BIN=$(pwd)/tests/machine-emulator-tools/linux/rollup/http/echo-dapp/target/debug/echo-dapp
+          export CARTESI_DAPP_BACKEND_BIN=$(pwd)/test-backend
+          export CARTESI_ECHO_DAPP_BACKEND_BIN=$(pwd)/echo-dapp
           cd tests/integration
           cargo test
 
