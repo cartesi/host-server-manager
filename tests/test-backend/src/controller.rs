@@ -87,14 +87,15 @@ impl AdvancingState {
 #[derive(Debug, Clone)]
 pub struct ControllerChannel {
     advance_tx: mpsc::Sender<AdvanceRequest>,
-    finish_tx: mpsc::Sender<AdvanceResult>,
     inspect_tx: mpsc::Sender<SyncInspectRequest>,
 }
 
 impl ControllerChannel {
     pub async fn process_advance(&self, request: AdvanceRequest) -> Result<(), AdvanceError> {
         if let Err(e) = self.advance_tx.send(request).await {
-            return Err(AdvanceError { cause: e.to_string() });
+            return Err(AdvanceError {
+                cause: e.to_string(),
+            });
         }
         Ok(())
     }
@@ -112,7 +113,9 @@ impl ControllerChannel {
             .await?;
         match response_rx.await {
             Ok(val) => Ok(val),
-            Err(e) => Err(InspectError { cause: e.to_string() }),
+            Err(e) => Err(InspectError {
+                cause: e.to_string(),
+            }),
         }
     }
 }
@@ -160,10 +163,7 @@ pub fn new_controller(model: Box<Model>, config: Config) -> (ControllerChannel, 
     let (finish_tx, finish_rx) = mpsc::channel::<AdvanceResult>(1000);
     let (inspect_tx, inspect_rx) = mpsc::channel::<SyncInspectRequest>(1000);
     let service = ControllerService {
-        state: State::Idle(IdleState {
-            model,
-            finish_tx: finish_tx.clone(),
-        }),
+        state: State::Idle(IdleState { model, finish_tx }),
         config,
         advance_rx,
         finish_rx,
@@ -171,7 +171,6 @@ pub fn new_controller(model: Box<Model>, config: Config) -> (ControllerChannel, 
     };
     let channel = ControllerChannel {
         advance_tx,
-        finish_tx,
         inspect_tx,
     };
 

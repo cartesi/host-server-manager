@@ -96,7 +96,10 @@ impl Model {
         _finish_channel: mpsc::Sender<AdvanceResult>,
     ) {
         eprintln!("Got advance request");
-        eprintln!("msg_sender: {}", &request.metadata.msg_sender.to_lowercase()[2..]);
+        eprintln!(
+            "msg_sender: {}",
+            &request.metadata.msg_sender.to_lowercase()[2..]
+        );
         eprintln!("block_number: {}", request.metadata.block_number);
         eprintln!("timestamp: {}", request.metadata.time_stamp);
         eprintln!("epoch_index: {}", request.metadata.epoch_index);
@@ -107,7 +110,9 @@ impl Model {
         eprintln!("Got inspect request");
         eprintln!("session_payload: {}", request.payload.to_lowercase());
         Ok(InspectReport {
-            reports: vec!(InspectRequest { payload: request.payload.to_lowercase() }),
+            reports: vec![InspectRequest {
+                payload: request.payload.to_lowercase(),
+            }],
         })
     }
 }
