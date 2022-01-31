@@ -39,7 +39,7 @@ Scenario: asking host server manager to advance state correctly within existent 
         | input_payload       | <input_payload> |
     Examples:
         | active_epoch | current_input | msg_sender                               | block_number | timestamp | epoch | input | input_payload |
-        | 0            | 0             | ffffffffffffffffffffffffffffffffffffffff | 123          | 214324234 | 124   | 125   | deadbeef      |
+        | 0            | 0             | ffffffffffffffffffffffffffffffffffffffff | 123          | 214324234 | 0     | 0     | deadbeef      |
 
 # Erroneous scenarios for the advance request
 @serial
@@ -58,8 +58,10 @@ Scenario: asking host server manager to advance state incorrectly within existen
         | input_payload       | <input_payload> |
     Then host server manager reports <error_code> error
     Examples:
-        | active_epoch | current_input | msg_sender | block_number | timestamp | epoch | input | input_payload | error_code      |
-        | 0            | 0             | None       | None         | None      | None  | None  | deadbeef      | InvalidArgument |
-        | 0            | 0             | None       | 123          | 214324234 | 124   | 125   | deadbeef      | InvalidArgument |
-        | 100          | 0             | ffffffffffffffffffffffffffffffffffffffff | 123          | 0         | 124   | 125   | deadbeef      | InvalidArgument |
-        | 0            | 60            | ffffffffffffffffffffffffffffffffffffffff | 123          | 0         | 124   | 125   | deadbeef      | InvalidArgument |
+        | active_epoch | current_input | msg_sender                               | block_number | timestamp | epoch | input | input_payload | error_code      |
+        | 0            | 0             | None                                     | None         | None      | None  | None  | deadbeef      | InvalidArgument |
+        | 0            | 0             | None                                     | 123          | 214324234 | 0     | 0     | deadbeef      | InvalidArgument |
+        | 100          | 0             | ffffffffffffffffffffffffffffffffffffffff | 123          | 0         | 100   | 0     | deadbeef      | InvalidArgument |
+        | 0            | 60            | ffffffffffffffffffffffffffffffffffffffff | 123          | 0         | 0     | 60    | deadbeef      | InvalidArgument |
+        | 0            | 0             | ffffffffffffffffffffffffffffffffffffffff | 123          | 0         | 1     | 0     | deadbeef      | InvalidArgument |
+        | 0            | 0             | ffffffffffffffffffffffffffffffffffffffff | 123          | 0         | 0     | 1     | deadbeef      | InvalidArgument |

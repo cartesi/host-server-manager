@@ -23,8 +23,8 @@ Scenario: perform report request within an advance procedure
         | msg_sender          | ffffffffffffffffffffffffffffffffffffffff |
         | block_number        | 123                                      |
         | timestamp           | 123124123                                |
-        | epoch_index         | 124                                      |
-        | input_index         | 125                                      |
+        | epoch_index         | 0                                        |
+        | input_index         | 0                                        |
         | input_payload       | deadbeef                                 |
     And host server manager logs 'setting state to advance'
     When client sends report request with the following parameters:
@@ -43,8 +43,8 @@ Scenario: perform report request with incorrect data within an advance procedure
         | msg_sender          | ffffffffffffffffffffffffffffffffffffffff |
         | block_number        | 123                                      |
         | timestamp           | 123124123                                |
-        | epoch_index         | 124                                      |
-        | input_index         | 125                                      |
+        | epoch_index         | 0                                        |
+        | input_index         | 0                                        |
         | input_payload       | deadbeef                                 |
     And host server manager logs 'setting state to advance'
     When client sends report request with the following parameters:

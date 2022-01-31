@@ -44,7 +44,7 @@ Scenario: asking host server manager session status after advance request
         | <session_id> | 0            | [0]   |
     Examples:
         |  session_id  | active_epoch | current_input | msg_sender                               | block_number | timestamp | epoch | input | input_payload |
-        | test_session | 0            | 0             | ffffffffffffffffffffffffffffffffffffffff | 123          | 214324234 | 124   | 125   | deadbeef      |
+        | test_session | 0            | 0             | ffffffffffffffffffffffffffffffffffffffff | 123          | 214324234 | 0     | 0     | deadbeef      |
 
     Scenario: asking host server manager unexistent session status
     Given host server manager is up

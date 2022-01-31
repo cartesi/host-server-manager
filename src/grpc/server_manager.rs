@@ -102,6 +102,12 @@ impl ServerManager for ServerManagerService {
             .data
             .try_into()
             .or(Err(Status::invalid_argument("invalid address")))?;
+        if metadata.epoch_index != request.active_epoch_index {
+            return Err(Status::invalid_argument("metadata epoch index mismatch"));
+        }
+        if metadata.input_index != request.current_input_index {
+            return Err(Status::invalid_argument("metadata input index mismatch"));
+        }
         let advance_request = AdvanceRequest {
             metadata: AdvanceMetadata {
                 msg_sender,

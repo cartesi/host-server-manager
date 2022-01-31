@@ -23,8 +23,8 @@ Scenario: perform finish request within an advance procedure
         | msg_sender          | ffffffffffffffffffffffffffffffffffffffff |
         | block_number        | 123                                      |
         | timestamp           | 123124123                                |
-        | epoch_index         | 124                                      |
-        | input_index         | 125                                      |
+        | epoch_index         | 0                                        |
+        | input_index         | 0                                        |
         | input_payload       | deadbeef                                 |
     And host server manager logs 'setting state to advance'
     And client sends finish request with the following parameters:
@@ -49,8 +49,8 @@ Scenario: perform invalid finish request within an advance procedure
         | msg_sender          | ffffffffffffffffffffffffffffffffffffffff |
         | block_number        | 123                                      |
         | timestamp           | 123124123                                |
-        | epoch_index         | 124                                      |
-        | input_index         | 125                                      |
+        | epoch_index         | 0                                        |
+        | input_index         | 0                                        |
         | input_payload       | deadbeef                                 |
     And host server manager logs 'setting state to advance'
     And client sends finish request with the following parameters:

@@ -37,6 +37,6 @@ Scenario: perform echo dapp request within an advance procedure
     Then host server manager logs 'POST /<request> HTTP/1.1" <code>'
     Examples:
         | active_epoch | current_input | msg_sender                               | block_number | timestamp | epoch_index | input_index | payload  | vouchers | notices | reports | request | code |
-        | 0            | 0             | ffffffffffffffffffffffffffffffffffffffff | 123          | 123124123 | 124         | 125         | deadbeef | 1        | 0       | 0       | voucher | 201  |
-        | 0            | 0             | ffffffffffffffffffffffffffffffffffffffff | 123          | 123124123 | 124         | 125         | deadbeef | 0        | 1       | 0       | notice  | 201  |
-        | 0            | 0             | ffffffffffffffffffffffffffffffffffffffff | 123          | 123124123 | 124         | 125         | deadbeef | 0        | 0       | 1       | report  | 202  |
+        | 0            | 0             | ffffffffffffffffffffffffffffffffffffffff | 123          | 123124123 | 0           | 0           | deadbeef | 1        | 0       | 0       | voucher | 201  |
+        | 0            | 0             | ffffffffffffffffffffffffffffffffffffffff | 123          | 123124123 | 0           | 0           | deadbeef | 0        | 1       | 0       | notice  | 201  |
+        | 0            | 0             | ffffffffffffffffffffffffffffffffffffffff | 123          | 123124123 | 0           | 0           | deadbeef | 0        | 0       | 1       | report  | 202  |
