@@ -25,6 +25,8 @@ use crate::world::{
 
 use host_server_manager_tests::utils::{start_listener, wait_process_output};
 
+const ACTIX_STARTING_LOG: &'static str = "Actix runtime found; starting in Actix runtime";
+
 #[given("host server manager is up")]
 async fn start_manager(world: &mut TestWorld) {
     world.manager_handler = Some(
@@ -62,12 +64,7 @@ async fn start_manager(world: &mut TestWorld) {
 
     if let Err(e) = wait_process_output(
         world.manager_receiver.as_ref().unwrap(),
-        vec![
-            (
-                "actix_server::server] Actix runtime found. Starting in Actix runtime".to_string(),
-                2,
-            ),
-        ],
+        vec![(ACTIX_STARTING_LOG.to_string(), 2)],
     ) {
         panic!("{}", e);
     }
@@ -105,12 +102,7 @@ async fn start_backend(world: &mut TestWorld) {
 
     if let Err(e) = wait_process_output(
         world.dapp_receiver.as_ref().unwrap(),
-        vec![
-            (
-                "actix_server::server] Actix runtime found. Starting in Actix runtime".to_string(),
-                1,
-            ),
-        ],
+        vec![(ACTIX_STARTING_LOG.to_string(), 1)],
     ) {
         panic!("{}", e);
     }
@@ -154,7 +146,7 @@ async fn start_echo(world: &mut TestWorld, vouchers: u32, notices: u32, reports:
                 1,
             ),
             (
-                "actix_server::server] Actix runtime found; starting in Actix runtime".to_string(),
+                ACTIX_STARTING_LOG.to_string(),
                 1,
             ),
         ],
