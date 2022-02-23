@@ -33,19 +33,19 @@ pub struct Config {
     #[structopt(long, env, default_value = "5002")]
     pub http_inspect_port: u16,
 
-    /// HTTP address of the DApp backend
+    /// HTTP address of the Rollup Server endpoint
     #[structopt(long, env, default_value = DEFAULT_ADDRESS)]
-    pub dapp_http_address: String,
+    pub http_rollup_server_address: String,
 
-    /// HTTP port of the DApp backend
-    #[structopt(long, env, default_value = "5003")]
-    pub dapp_http_port: u16,
-
-    /// HTTP address of the HTTP-Dispatcher endpoint
-    #[structopt(long, env, default_value = DEFAULT_ADDRESS)]
-    pub http_dispatcher_address: String,
-
-    /// HTTP port of the HTTP-Dispatcher endpoint
+    /// HTTP port of the Rollup Server endpoint
     #[structopt(long, env, default_value = "5004")]
-    pub http_dispatcher_port: u16,
+    pub http_rollup_server_port: u16,
+
+    /// Duration in ms for the finish request to timeout
+    #[structopt(long, env, default_value = "10000")]
+    pub finish_timeout: u64,
+
+    /// Enable debug log-level
+    #[structopt(long, env, default_value = "info")]
+    pub log_level: String,
 }

@@ -1,4 +1,4 @@
-// Copyright 2021 Cartesi Pte. Ltd.
+// Copyright 2022 Cartesi Pte. Ltd.
 //
 // SPDX-License-Identifier: Apache-2.0
 // Licensed under the Apache License, Version 2.0 (the "License"); you may not use
@@ -10,6 +10,16 @@
 // CONDITIONS OF ANY KIND, either express or implied. See the License for the
 // specific language governing permissions and limitations under the License.
 
-fn main() -> std::io::Result<()> {
-    tonic_build::compile_protos("third-party/grpc-interfaces/server-manager.proto")
+mod common;
+
+mod grpc_tests {
+    mod advance_state;
+    mod end_session;
+    mod finish_epoch;
+    mod get_epoch_status;
+    mod get_session_status;
+    mod get_status;
+    mod get_version;
+    mod inspect_state;
+    mod start_session;
 }

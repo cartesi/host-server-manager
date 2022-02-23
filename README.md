@@ -42,3 +42,9 @@ To run the tests, execute the command:
 ```
 cargo tests
 ```
+
+In integration tests, it is possible to see the host-server-manager logs by setting the following variable:
+
+```
+export CARTESI_TEST_VERSBOSE=1
+```

@@ -12,20 +12,20 @@
 
 use actix_web::{error, error::Error};
 
-use crate::controller::InsertError;
+use crate::controller::ControllerError;
 use crate::conversions::DecodeError;
-use crate::dapp_client::DAppError;
+use crate::model::RollupException;
 
 use super::model::{DecodeStatusError, VoucherDecodeError};
 
-impl From<DAppError> for Error {
-    fn from(e: DAppError) -> Error {
+impl From<RollupException> for Error {
+    fn from(e: RollupException) -> Error {
         error::ErrorInternalServerError(e.to_string())
     }
 }
 
-impl From<InsertError> for Error {
-    fn from(e: InsertError) -> Error {
+impl From<ControllerError> for Error {
+    fn from(e: ControllerError) -> Error {
         error::ErrorBadRequest(e.to_string())
     }
 }
@@ -44,6 +44,6 @@ impl From<VoucherDecodeError> for Error {
 
 impl From<DecodeStatusError> for Error {
     fn from(e: DecodeStatusError) -> Error {
-        error::ErrorUnprocessableEntity(e.to_string())
+        error::ErrorBadRequest(e.to_string())
     }
 }

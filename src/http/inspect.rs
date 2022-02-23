@@ -16,11 +16,11 @@ use actix_web::{
 };
 
 use crate::config::Config;
+use crate::controller::Controller;
 use crate::conversions;
-use crate::dapp_client::Controller;
-use crate::model::InspectRequest;
+use crate::model::InspectStateRequest;
 
-use super::model::{HttpInspectResponse, HttpReport};
+use super::model::HttpInspectResult;
 
 pub async fn start_service(config: &Config, controller: Controller) -> std::io::Result<()> {
     HttpServer::new(move || {
@@ -43,13 +43,11 @@ async fn inspect(
     controller: Data<Controller>,
 ) -> HttpResult<impl Responder> {
     let payload = conversions::decode_ethereum_binary(payload.as_ref())?;
-    let request = InspectRequest { payload };
+    let request = InspectStateRequest { payload };
     let rx = controller.inspect(request).await;
-    let reports = rx.await.map_err(|_| {
+    let response = rx.await.map_err(|_| {
         log::error!("sender dropped the channel");
         error::ErrorInternalServerError("failed to send inspect request")
     })??;
-    let reports = reports.into_iter().map(HttpReport::from).collect();
-    let response = HttpInspectResponse { reports };
-    Ok(HttpResponse::Ok().json(response))
+    Ok(HttpResponse::Ok().json(HttpInspectResult::from(response)))
 }

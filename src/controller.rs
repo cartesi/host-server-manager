@@ -1,4 +1,4 @@
-// Copyright 2021 Cartesi Pte. Ltd.
+// Copyright 2022 Cartesi Pte. Ltd.
 //
 // SPDX-License-Identifier: Apache-2.0
 // Licensed under the Apache License, Version 2.0 (the "License"); you may not use
@@ -10,56 +10,50 @@
 // CONDITIONS OF ANY KIND, either express or implied. See the License for the
 // specific language governing permissions and limitations under the License.
 
-#[cfg(test)]
-use mockall::{automock, predicate::*, Sequence};
-
 use async_trait::async_trait;
 use snafu::Snafu;
+use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::model::{
-    AdvanceRequest, AdvanceResult, FinishStatus, InspectRequest, Notice, Report, Voucher,
-};
-use crate::sync_request::SyncRequest;
+use crate::model::*;
 
-const BUFFER_SIZE: usize = 1000;
+const MPSC_BUFFER_SIZE: usize = 1000;
 
-/// State-machine that controls whether the host server manager is advancing the epoch state or
-/// it is idle.
-/// When processing advancing the epoch state, the host server manager receives vouchers, notices,
-/// and reports until it receives a finish request.
-/// This struct manipulates the data inside an independent thread that can only communicate through
-/// channels.
-#[derive(Debug)]
-pub struct Controller<D: DApp> {
-    advance_tx: mpsc::Sender<SyncAdvanceRequest<D::Error>>,
-    inspect_tx: mpsc::Sender<SyncInspectRequest<D::Error>>,
+/// State-machine that controls the rollup state.
+#[derive(Clone, Debug)]
+pub struct Controller {
+    advance_tx: mpsc::Sender<SyncAdvanceStateRequest>,
+    inspect_tx: mpsc::Sender<SyncInspectResult>,
+    finish_tx: mpsc::Sender<SyncFinishRequest>,
     voucher_tx: mpsc::Sender<SyncVoucherRequest>,
     notice_tx: mpsc::Sender<SyncNoticeRequest>,
-    report_tx: mpsc::Sender<Report>,
-    finish_tx: mpsc::Sender<FinishStatus>,
+    report_tx: mpsc::Sender<SyncReportRequest>,
+    exception_tx: mpsc::Sender<SyncExceptionRequest>,
     shutdown_tx: mpsc::Sender<SyncShutdownRequest>,
 }
 
-impl<D: DApp> Controller<D> {
-    pub fn new(dapp: D) -> Self {
-        let (advance_tx, advance_rx) = mpsc::channel(BUFFER_SIZE);
-        let (inspect_tx, inspect_rx) = mpsc::channel(BUFFER_SIZE);
-        let (voucher_tx, voucher_rx) = mpsc::channel(BUFFER_SIZE);
-        let (notice_tx, notice_rx) = mpsc::channel(BUFFER_SIZE);
-        let (report_tx, report_rx) = mpsc::channel(BUFFER_SIZE);
-        let (finish_tx, finish_rx) = mpsc::channel(BUFFER_SIZE);
-        let (shutdown_tx, shutdown_rx) = mpsc::channel(BUFFER_SIZE);
-        let service = Service::new(
-            dapp,
+impl Controller {
+    pub fn new(finish_timeout: Duration) -> Self {
+        let (advance_tx, advance_rx) = mpsc::channel(MPSC_BUFFER_SIZE);
+        let (inspect_tx, inspect_rx) = mpsc::channel(MPSC_BUFFER_SIZE);
+        let (voucher_tx, voucher_rx) = mpsc::channel(MPSC_BUFFER_SIZE);
+        let (notice_tx, notice_rx) = mpsc::channel(MPSC_BUFFER_SIZE);
+        let (report_tx, report_rx) = mpsc::channel(MPSC_BUFFER_SIZE);
+        let (finish_tx, finish_rx) = mpsc::channel(MPSC_BUFFER_SIZE);
+        let (exception_tx, exception_rx) = mpsc::channel(MPSC_BUFFER_SIZE);
+        let (shutdown_tx, shutdown_rx) = mpsc::channel(MPSC_BUFFER_SIZE);
+        let data = SharedStateData {
             advance_rx,
             inspect_rx,
             voucher_rx,
             notice_rx,
             report_rx,
             finish_rx,
+            exception_rx,
             shutdown_rx,
-        );
+            finish_timeout,
+        };
+        let service = Service::new(data);
         tokio::spawn(service.run());
         Self {
             advance_tx,
@@ -68,48 +62,58 @@ impl<D: DApp> Controller<D> {
             notice_tx,
             report_tx,
             finish_tx,
+            exception_tx,
             shutdown_tx,
         }
     }
 
     pub async fn advance(
         &self,
-        request: AdvanceRequest,
-    ) -> oneshot::Receiver<Result<AdvanceResult, D::Error>> {
+        request: AdvanceStateRequest,
+    ) -> oneshot::Receiver<Result<AdvanceResult, RollupException>> {
         SyncRequest::send(&self.advance_tx, request).await
     }
 
     pub async fn inspect(
         &self,
-        request: InspectRequest,
-    ) -> oneshot::Receiver<Result<Vec<Report>, D::Error>> {
+        request: InspectStateRequest,
+    ) -> oneshot::Receiver<Result<InspectResult, RollupException>> {
         SyncRequest::send(&self.inspect_tx, request).await
+    }
+
+    pub async fn finish(
+        &self,
+        status: FinishStatus,
+    ) -> oneshot::Receiver<Result<RollupRequest, ControllerError>> {
+        SyncRequest::send(&self.finish_tx, status).await
     }
 
     pub async fn insert_voucher(
         &self,
         voucher: Voucher,
-    ) -> oneshot::Receiver<Result<u64, InsertError>> {
+    ) -> oneshot::Receiver<Result<usize, ControllerError>> {
         SyncRequest::send(&self.voucher_tx, voucher).await
     }
 
     pub async fn insert_notice(
         &self,
         notice: Notice,
-    ) -> oneshot::Receiver<Result<u64, InsertError>> {
+    ) -> oneshot::Receiver<Result<usize, ControllerError>> {
         SyncRequest::send(&self.notice_tx, notice).await
     }
 
-    pub async fn insert_report(&self, request: Report) {
-        if let Err(e) = self.report_tx.send(request).await {
-            log::error!("failed to send insert report request ({})", e);
-        }
+    pub async fn insert_report(
+        &self,
+        report: Report,
+    ) -> oneshot::Receiver<Result<(), ControllerError>> {
+        SyncRequest::send(&self.report_tx, report).await
     }
 
-    pub async fn finish(&self, status: FinishStatus) {
-        if let Err(e) = self.finish_tx.send(status).await {
-            log::error!("failed to send finish request ({})", e);
-        }
+    pub async fn notify_exception(
+        &self,
+        exception: RollupException,
+    ) -> oneshot::Receiver<Result<(), ControllerError>> {
+        SyncRequest::send(&self.exception_tx, exception).await
     }
 
     pub async fn shutdown(&self) -> oneshot::Receiver<()> {
@@ -117,78 +121,25 @@ impl<D: DApp> Controller<D> {
     }
 }
 
-// Auto derive clone doesn't work well with generics and we don't want to enforce clone for DApp
-impl<D: DApp> Clone for Controller<D> {
-    fn clone(&self) -> Self {
-        Self {
-            advance_tx: self.advance_tx.clone(),
-            inspect_tx: self.inspect_tx.clone(),
-            voucher_tx: self.voucher_tx.clone(),
-            notice_tx: self.notice_tx.clone(),
-            report_tx: self.report_tx.clone(),
-            finish_tx: self.finish_tx.clone(),
-            shutdown_tx: self.shutdown_tx.clone(),
-        }
-    }
+#[derive(Debug, PartialEq, Snafu)]
+pub enum ControllerError {
+    #[snafu(display("no rollup request available"))]
+    FetchRequestTimeout,
+    #[snafu(display("invalid request {} in {} state", request_name, state_name))]
+    InvalidRequest {
+        request_name: String,
+        state_name: String,
+    },
 }
-
-#[derive(Debug, Snafu, PartialEq)]
-#[snafu(display("request not accepted when state is idle"))]
-pub struct InsertError {}
-
-/// Service used to communicate with the DApp
-#[cfg_attr(test, automock(type Error=tests::MockDAppError;))]
-#[async_trait]
-pub trait DApp: std::fmt::Debug + Send + Sync + 'static {
-    type Error: std::error::Error + Send + Sync;
-
-    /// Send an advance request to the client.
-    /// The request should be processed in another thread and the response should be sent through
-    /// an oneshot channel.
-    async fn advance(&self, request: AdvanceRequest) -> oneshot::Receiver<Result<(), Self::Error>>;
-
-    /// Send an inspect request to the client.
-    async fn inspect(
-        &self,
-        request: InspectRequest,
-    ) -> oneshot::Receiver<Result<Vec<Report>, Self::Error>>;
-
-    /// Shutdown the DApp service.
-    async fn shutdown(&self) -> oneshot::Receiver<()>;
-}
-
-type SyncAdvanceRequest<E> = SyncRequest<AdvanceRequest, Result<AdvanceResult, E>>;
-type SyncInspectRequest<E> = SyncRequest<InspectRequest, Result<Vec<Report>, E>>;
-type SyncVoucherRequest = SyncRequest<Voucher, Result<u64, InsertError>>;
-type SyncNoticeRequest = SyncRequest<Notice, Result<u64, InsertError>>;
-type SyncShutdownRequest = SyncRequest<(), ()>;
 
 struct Service {
     state: Box<dyn State>,
 }
 
 impl Service {
-    fn new<D: DApp>(
-        dapp: D,
-        advance_rx: mpsc::Receiver<SyncAdvanceRequest<D::Error>>,
-        inspect_rx: mpsc::Receiver<SyncInspectRequest<D::Error>>,
-        voucher_rx: mpsc::Receiver<SyncVoucherRequest>,
-        notice_rx: mpsc::Receiver<SyncNoticeRequest>,
-        report_rx: mpsc::Receiver<Report>,
-        finish_rx: mpsc::Receiver<FinishStatus>,
-        shutdown_rx: mpsc::Receiver<SyncShutdownRequest>,
-    ) -> Self {
-        let channels = Channels {
-            advance_rx,
-            inspect_rx,
-            voucher_rx,
-            notice_rx,
-            report_rx,
-            finish_rx,
-            shutdown_rx,
-        };
+    fn new(data: SharedStateData) -> Self {
         Self {
-            state: Idle::new(dapp, channels),
+            state: IdleState::new(data),
         }
     }
 
@@ -203,482 +154,723 @@ impl Service {
         }
     }
 
-    async fn shutdown<D>(request: SyncShutdownRequest, dapp: &D) -> Option<Box<dyn State>>
+    fn handle_invalid<T, U>(
+        request: SyncRequest<T, Result<U, ControllerError>>,
+        state: Box<dyn State>,
+        request_name: &str,
+    ) -> Option<Box<dyn State>>
     where
-        D: DApp,
+        T: std::fmt::Debug + Send + Sync,
+        U: std::fmt::Debug + Send + Sync,
     {
+        let err = ControllerError::InvalidRequest {
+            state_name: state.name(),
+            request_name: request_name.into(),
+        };
+        log::warn!("{}", err.to_string());
+        let (_, response_tx) = request.into_inner();
+        send_response(response_tx, Err(err));
+        Some(state)
+    }
+
+    fn handle_exception<T>(
+        request: SyncExceptionRequest,
+        state_response_tx: oneshot::Sender<Result<T, RollupException>>,
+        data: SharedStateData,
+    ) -> Option<Box<dyn State>>
+    where
+        T: std::fmt::Debug + Send + Sync,
+    {
+        log::info!("received exception request; setting state to idle");
+        log::debug!("request: {:?}", request);
+        let (exception, exception_response_tx) = request.into_inner();
+        send_response(state_response_tx, Err(exception));
+        send_response(exception_response_tx, Ok(()));
+        Some(IdleState::new(data))
+    }
+
+    fn shutdown(request: SyncShutdownRequest) -> Option<Box<dyn State>> {
         log::info!("processing shutdown request");
-        let rx = dapp.shutdown().await;
-        if let Err(_) = rx.await {
-            log::error!("failed to send shutdown to dapp (channel dropped)");
-        }
         request.process(|_| ());
         None
     }
 }
 
-struct Channels<D: DApp> {
-    advance_rx: mpsc::Receiver<SyncAdvanceRequest<D::Error>>,
-    inspect_rx: mpsc::Receiver<SyncInspectRequest<D::Error>>,
+struct SyncRequest<T, U>
+where
+    T: Send + Sync,
+    U: Send + Sync,
+{
+    request: T,
+    response_tx: oneshot::Sender<U>,
+}
+
+impl<T, U> SyncRequest<T, U>
+where
+    T: std::fmt::Debug + Send + Sync,
+    U: std::fmt::Debug + Send + Sync,
+{
+    async fn send(tx: &mpsc::Sender<Self>, request: T) -> oneshot::Receiver<U> {
+        let (response_tx, response_rx) = oneshot::channel();
+        if let Err(e) = tx
+            .send(SyncRequest {
+                request,
+                response_tx,
+            })
+            .await
+        {
+            log::error!("failed to send request ({})", e)
+        }
+        response_rx
+    }
+
+    fn into_inner(self) -> (T, oneshot::Sender<U>) {
+        (self.request, self.response_tx)
+    }
+
+    fn process<F>(self, f: F)
+    where
+        F: FnOnce(T) -> U,
+    {
+        let response = f(self.request);
+        send_response(self.response_tx, response);
+    }
+}
+
+fn send_response<U>(tx: oneshot::Sender<U>, response: U)
+where
+    U: std::fmt::Debug + Send + Sync,
+{
+    if let Err(_) = tx.send(response) {
+        log::warn!("failed to send response (channel dropped)");
+    }
+}
+
+impl<T, U> std::fmt::Debug for SyncRequest<T, U>
+where
+    T: std::fmt::Debug + Send + Sync,
+    U: std::fmt::Debug + Send + Sync,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+        write!(f, "{:?}", self.request)
+    }
+}
+
+type SyncAdvanceStateRequest =
+    SyncRequest<AdvanceStateRequest, Result<AdvanceResult, RollupException>>;
+type SyncInspectResult = SyncRequest<InspectStateRequest, Result<InspectResult, RollupException>>;
+type SyncFinishRequest = SyncRequest<FinishStatus, Result<RollupRequest, ControllerError>>;
+type SyncVoucherRequest = SyncRequest<Voucher, Result<usize, ControllerError>>;
+type SyncNoticeRequest = SyncRequest<Notice, Result<usize, ControllerError>>;
+type SyncReportRequest = SyncRequest<Report, Result<(), ControllerError>>;
+type SyncExceptionRequest = SyncRequest<RollupException, Result<(), ControllerError>>;
+type SyncShutdownRequest = SyncRequest<(), ()>;
+
+struct SharedStateData {
+    advance_rx: mpsc::Receiver<SyncAdvanceStateRequest>,
+    inspect_rx: mpsc::Receiver<SyncInspectResult>,
+    finish_rx: mpsc::Receiver<SyncFinishRequest>,
     voucher_rx: mpsc::Receiver<SyncVoucherRequest>,
     notice_rx: mpsc::Receiver<SyncNoticeRequest>,
-    report_rx: mpsc::Receiver<Report>,
-    finish_rx: mpsc::Receiver<FinishStatus>,
+    report_rx: mpsc::Receiver<SyncReportRequest>,
+    exception_rx: mpsc::Receiver<SyncExceptionRequest>,
     shutdown_rx: mpsc::Receiver<SyncShutdownRequest>,
+    finish_timeout: Duration,
 }
 
 /// OOP state design-pattern
 #[async_trait]
 trait State: Send + Sync {
     async fn process(self: Box<Self>) -> Option<Box<dyn State>>;
+    fn name(&self) -> String;
 }
 
-/// In idle state, the controller processes inspect requests and waits for advance requests.
-struct Idle<D: DApp> {
-    dapp: D,
-    channels: Channels<D>,
+/// The controller waits for finish request from the DApp
+struct IdleState {
+    data: SharedStateData,
 }
 
-impl<D: DApp> Idle<D> {
-    fn new(dapp: D, channels: Channels<D>) -> Box<dyn State> {
-        log::info!("setting state to idle");
-        Box::new(Self { dapp, channels })
-    }
-
-    async fn inspect(&self, request: InspectRequest) -> Option<Result<Vec<Report>, D::Error>> {
-        let rx = self.dapp.inspect(request).await;
-        match rx.await {
-            Ok(result) => Some(result.map_err(|e| {
-                log::error!("failed to send inspect request ({})", e);
-                e
-            })),
-            Err(e) => {
-                log::error!("failed to receive inspect response ({})", e);
-                None
-            }
-        }
+impl IdleState {
+    fn new(data: SharedStateData) -> Box<dyn State> {
+        Box::new(Self { data })
     }
 }
 
 #[async_trait]
-impl<D: DApp> State for Idle<D> {
+impl State for IdleState {
     async fn process(mut self: Box<Self>) -> Option<Box<dyn State>> {
         tokio::select! {
             biased;
-            Some(request) = self.channels.voucher_rx.recv() => {
-                log::warn!("ignoring voucher when idle");
-                request.process(|_| Err(InsertError {}));
-                Some(self)
+            Some(request) = self.data.finish_rx.recv() => {
+                log::info!("received finish request; changing state to fetch request");
+                log::debug!("request: {:?}", request);
+                let (_, response_tx) = request.into_inner();
+                Some(FetchRequestState::new(self.data, response_tx))
             }
-            Some(request) = self.channels.notice_rx.recv() => {
-                log::warn!("ignoring notice when idle");
-                request.process(|_| Err(InsertError {}));
-                Some(self)
+            Some(request) = self.data.voucher_rx.recv() => {
+                Service::handle_invalid(request, self, "voucher")
             }
-            Some(_) = self.channels.report_rx.recv() => {
-                log::warn!("ignoring report when idle");
-                Some(self)
+            Some(request) = self.data.notice_rx.recv() => {
+                Service::handle_invalid(request, self, "notice")
             }
-            Some(_) = self.channels.finish_rx.recv() => {
-                log::warn!("ignoring finish when idle");
-                Some(self)
+            Some(request) = self.data.report_rx.recv() => {
+                Service::handle_invalid(request, self, "report")
             }
-            Some(request) = self.channels.inspect_rx.recv() => {
-                log::info!("processing inspect request");
-                request.try_process_async(|request| self.inspect(request)).await;
-                Some(self)
+            Some(request) = self.data.exception_rx.recv() => {
+                Service::handle_invalid(request, self, "exception")
             }
-            Some(request) = self.channels.advance_rx.recv() => {
-                log::info!("processing advance request");
-                Some(Advance::new(self.dapp, self.channels, request).await)
-            }
-            Some(request) = self.channels.shutdown_rx.recv() => {
-                Service::shutdown(request, &self.dapp).await
+            Some(request) = self.data.shutdown_rx.recv() => {
+                Service::shutdown(request)
             }
         }
     }
+
+    fn name(&self) -> String {
+        "idle".into()
+    }
 }
 
-/// When advancing, the controller receives vouchers, notices, reports and the finish request.
-/// The advance is only finished when it receives both a finish request and the DApp advance
-/// response.
-/// There are two distinct advance states.
-/// The first state waits for the DApp response and listen to requests that require responses, such
-/// as insert voucher and insert notice.
-/// The second advance state listen to all advance-related requests and waits until finish is
-/// called.
-/// Notice that the advance states do no handle the advance and inspect requests.
-/// Those are ketp in the queue until the controller goes back to the idle state.
-struct Advance<D: DApp> {
-    dapp: D,
-    channels: Channels<D>,
-    advance_tx: oneshot::Sender<Result<AdvanceResult, D::Error>>,
-    dapp_advance_rx: oneshot::Receiver<Result<(), D::Error>>,
-    vouchers: Vec<Voucher>,
-    notices: Vec<Notice>,
+/// The controller waits for either an inspect of an advance request from the gRPC service
+struct FetchRequestState {
+    data: SharedStateData,
+    finish_response_tx: oneshot::Sender<Result<RollupRequest, ControllerError>>,
 }
 
-impl<D: DApp> Advance<D> {
-    async fn new(
-        dapp: D,
-        channels: Channels<D>,
-        request: SyncAdvanceRequest<D::Error>,
+impl FetchRequestState {
+    fn new(
+        data: SharedStateData,
+        finish_response_tx: oneshot::Sender<Result<RollupRequest, ControllerError>>,
     ) -> Box<dyn State> {
-        log::info!("setting state to advance");
-        let (request, advance_tx) = request.into_inner();
-        let dapp_advance_rx = dapp.advance(request).await;
         Box::new(Self {
-            dapp,
-            channels,
-            advance_tx,
-            dapp_advance_rx,
-            vouchers: vec![],
-            notices: vec![],
+            data,
+            finish_response_tx,
         })
     }
 }
 
 #[async_trait]
-impl<D: DApp> State for Advance<D> {
+impl State for FetchRequestState {
     async fn process(mut self: Box<Self>) -> Option<Box<dyn State>> {
         tokio::select! {
             biased;
-            result = &mut self.dapp_advance_rx => {
-                log::info!("processing dapp advance response");
-                match result {
-                    Ok(result) => match result {
-                        Ok(_) => Some(AdvanceUntilFinish::from(self)),
-                        Err(e) => {
-                            log::error!("failed to send advance request to dapp ({})", e);
-                            if let Err(_) = self.advance_tx.send(Err(e)) {
-                                log::error!("failed to send advance response (channel dropped)");
-                            }
-                            Some(Idle::new(self.dapp, self.channels))
-                        }
-                    }
-                    Err(e) => {
-                        log::error!("failed to receive dapp advance response ({})", e);
-                        Some(Idle::new(self.dapp, self.channels))
-                    }
-                }
+            _ = tokio::time::sleep(self.data.finish_timeout) => {
+                log::info!("fetch request timed out; setting state to idle");
+                let timeout_err = ControllerError::FetchRequestTimeout;
+                send_response(self.finish_response_tx, Err(timeout_err));
+                Some(IdleState::new(self.data))
             }
-            Some(request) = self.channels.voucher_rx.recv() => {
-                log::info!("processing insert voucher request");
-                process_insert_request(request, &mut self.vouchers);
-                Some(self)
+            Some(request) = self.data.inspect_rx.recv() => {
+                log::info!("received inspect request; setting state to inspect");
+                log::debug!("request: {:?}", request);
+                let (inspect_request, inspect_response_tx) = request.into_inner();
+                let rollup_request = RollupRequest::InspectState(inspect_request);
+                send_response(self.finish_response_tx, Ok(rollup_request));
+                Some(InspectState::new(self.data, inspect_response_tx))
             }
-            Some(request) = self.channels.notice_rx.recv() => {
-                log::info!("processing insert notice request");
-                process_insert_request(request, &mut self.notices);
-                Some(self)
+            Some(request) = self.data.advance_rx.recv() => {
+                log::info!("received advance request; setting state to advance");
+                log::debug!("request: {:?}", request);
+                let (advance_request, advance_response_tx) = request.into_inner();
+                let rollup_request = RollupRequest::AdvanceState(advance_request);
+                send_response(self.finish_response_tx, Ok(rollup_request));
+                Some(AdvanceState::new(self.data, advance_response_tx))
             }
-            Some(request) = self.channels.shutdown_rx.recv() => {
-                Service::shutdown(request, &self.dapp).await
+            Some(request) = self.data.finish_rx.recv() => {
+                Service::handle_invalid(request, self, "finish")
+            }
+            Some(request) = self.data.voucher_rx.recv() => {
+                Service::handle_invalid(request, self, "voucher")
+            }
+            Some(request) = self.data.notice_rx.recv() => {
+                Service::handle_invalid(request, self, "notice")
+            }
+            Some(request) = self.data.report_rx.recv() => {
+                Service::handle_invalid(request, self, "report")
+            }
+            Some(request) = self.data.exception_rx.recv() => {
+                Service::handle_invalid(request, self, "exception")
+            }
+            Some(request) = self.data.shutdown_rx.recv() => {
+                Service::shutdown(request)
             }
         }
     }
+
+    fn name(&self) -> String {
+        "fetch request".into()
+    }
 }
 
-struct AdvanceUntilFinish<D: DApp> {
-    dapp: D,
-    channels: Channels<D>,
-    advance_tx: oneshot::Sender<Result<AdvanceResult, D::Error>>,
-    vouchers: Vec<Voucher>,
-    notices: Vec<Notice>,
+/// The controller wait for reports, exception, and finish
+struct InspectState {
+    data: SharedStateData,
+    inspect_response_tx: oneshot::Sender<Result<InspectResult, RollupException>>,
     reports: Vec<Report>,
 }
 
-impl<D: DApp> AdvanceUntilFinish<D> {
-    fn from(advance: Box<Advance<D>>) -> Box<dyn State> {
-        log::info!("setting state to advance until finish");
+impl InspectState {
+    fn new(
+        data: SharedStateData,
+        inspect_response_tx: oneshot::Sender<Result<InspectResult, RollupException>>,
+    ) -> Box<dyn State> {
         Box::new(Self {
-            dapp: advance.dapp,
-            channels: advance.channels,
-            advance_tx: advance.advance_tx,
-            vouchers: advance.vouchers,
-            notices: advance.notices,
+            data,
+            inspect_response_tx,
             reports: vec![],
         })
     }
 }
 
 #[async_trait]
-impl<D: DApp> State for AdvanceUntilFinish<D> {
+impl State for InspectState {
     async fn process(mut self: Box<Self>) -> Option<Box<dyn State>> {
         tokio::select! {
             biased;
-            Some(request) = self.channels.voucher_rx.recv() => {
-                log::info!("processing insert voucher request");
-                process_insert_request(request, &mut self.vouchers);
+            Some(request) = self.data.finish_rx.recv() => {
+                log::info!("received finish request; changing state to fetch request");
+                log::debug!("request: {:?}", request);
+                let inspect_response = InspectResult {
+                    reports: self.reports,
+                };
+                send_response(self.inspect_response_tx, Ok(inspect_response));
+                let (_, response_tx) = request.into_inner();
+                Some(FetchRequestState::new(self.data, response_tx))
+            }
+            Some(request) = self.data.report_rx.recv() => {
+                log::info!("received report request");
+                log::debug!("request: {:?}", request);
+                request.process(|report| {
+                    self.reports.push(report);
+                    Ok(())
+                });
                 Some(self)
             }
-            Some(request) = self.channels.notice_rx.recv() => {
-                log::info!("processing insert notice request");
-                process_insert_request(request, &mut self.notices);
-                Some(self)
+            Some(request) = self.data.exception_rx.recv() => {
+                Service::handle_exception(request, self.inspect_response_tx, self.data)
             }
-            Some(report) = self.channels.report_rx.recv() => {
-                log::info!("processing insert report request");
-                self.reports.push(report);
-                Some(self)
+            Some(request) = self.data.voucher_rx.recv() => {
+                Service::handle_invalid(request, self, "voucher")
             }
-            Some(status) = self.channels.finish_rx.recv() => {
-                log::info!("processing finish request");
+            Some(request) = self.data.notice_rx.recv() => {
+                Service::handle_invalid(request, self, "notice")
+            }
+            Some(request) = self.data.shutdown_rx.recv() => {
+                Service::shutdown(request)
+            }
+        }
+    }
+
+    fn name(&self) -> String {
+        "inspect".into()
+    }
+}
+
+/// The controller waits for vouchers, notices, reports, exception, and finish
+struct AdvanceState {
+    data: SharedStateData,
+    advance_response_tx: oneshot::Sender<Result<AdvanceResult, RollupException>>,
+    vouchers: Vec<Voucher>,
+    notices: Vec<Notice>,
+    reports: Vec<Report>,
+}
+
+impl AdvanceState {
+    fn new(
+        data: SharedStateData,
+        advance_response_tx: oneshot::Sender<Result<AdvanceResult, RollupException>>,
+    ) -> Box<dyn State> {
+        Box::new(Self {
+            data,
+            advance_response_tx,
+            vouchers: vec![],
+            notices: vec![],
+            reports: vec![],
+        })
+    }
+}
+
+#[async_trait]
+impl State for AdvanceState {
+    async fn process(mut self: Box<Self>) -> Option<Box<dyn State>> {
+        tokio::select! {
+            biased;
+            Some(request) = self.data.finish_rx.recv() => {
+                log::info!("received finish request; changing state to fetch request");
+                log::debug!("request: {:?}", request);
+                let (status, response_tx) = request.into_inner();
                 let result = AdvanceResult::new(
                     status,
                     self.vouchers,
                     self.notices,
                     self.reports,
                 );
-                if let Err(_) = self.advance_tx.send(Ok(result)) {
-                    log::error!("failed to send advance result (channel dropped)");
-                }
-                Some(Idle::new(self.dapp, self.channels))
+                send_response(self.advance_response_tx, Ok(result));
+                Some(FetchRequestState::new(self.data, response_tx))
             }
-            Some(request) = self.channels.shutdown_rx.recv() => {
-                Service::shutdown(request, &self.dapp).await
+            Some(request) = self.data.voucher_rx.recv() => {
+                log::info!("received voucher request");
+                log::debug!("request: {:?}", request);
+                request.process(|voucher| {
+                    self.vouchers.push(voucher);
+                    Ok(self.vouchers.len() - 1)
+                });
+                Some(self)
+            }
+            Some(request) = self.data.notice_rx.recv() => {
+                log::info!("received notice request");
+                log::debug!("request: {:?}", request);
+                request.process(|notice| {
+                    self.notices.push(notice);
+                    Ok(self.notices.len() - 1)
+                });
+                Some(self)
+            }
+            Some(request) = self.data.report_rx.recv() => {
+                log::info!("received report request");
+                log::debug!("request: {:?}", request);
+                request.process(|report| {
+                    self.reports.push(report);
+                    Ok(())
+                });
+                Some(self)
+            }
+            Some(request) = self.data.exception_rx.recv() => {
+                Service::handle_exception(request, self.advance_response_tx, self.data)
+            }
+            Some(request) = self.data.shutdown_rx.recv() => {
+                Service::shutdown(request)
             }
         }
     }
-}
 
-fn process_insert_request<T, E>(request: SyncRequest<T, Result<u64, E>>, vector: &mut Vec<T>)
-where
-    T: Send + Sync + std::fmt::Debug,
-    E: Send + Sync + std::fmt::Debug,
-{
-    request.process(|item| {
-        vector.push(item);
-        Ok(vector.len() as u64 - 1)
-    })
+    fn name(&self) -> String {
+        "advance".into()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::AdvanceMetadata;
-    use std::sync::Arc;
-    use tokio::sync::Notify;
 
-    fn setup() -> (MockDApp, Sequence) {
+    const TEST_FINISH_TIMEOUT: Duration = Duration::from_millis(100);
+
+    fn setup() -> Controller {
         // enable logs
         let _ = env_logger::builder()
             .filter_level(log::LevelFilter::Info)
             .is_test(true)
             .try_init();
 
-        // setup mock dapp
-        let mut dapp = MockDApp::new();
-        let sequence = Sequence::new();
-        dapp.expect_shutdown().times(1).return_once(|| {
-            let (response_tx, response_rx) = oneshot::channel();
-            response_tx.send(()).unwrap();
-            response_rx
-        });
-        (dapp, sequence)
+        Controller::new(TEST_FINISH_TIMEOUT)
     }
 
     #[tokio::test]
-    async fn test_it_sends_an_advance_request_and_dapp_returns_ok() {
-        let (mut dapp, mut sequence) = setup();
-        let advance = expect_advance_request(&mut dapp, &mut sequence).await;
-        let controller = Controller::new(dapp);
-        let advance_rx = controller.advance(advance.request).await;
-        advance.received.notified().await;
-        advance.response_tx.send(Ok(())).unwrap();
-        controller.finish(FinishStatus::Accept).await;
+    async fn test_it_rejects_invalid_requests_in_idle_state() {
+        let controller = setup();
+        let rx = controller.insert_voucher(mock_voucher()).await;
+        assert_eq!(
+            rx.await.unwrap().unwrap_err(),
+            ControllerError::InvalidRequest {
+                request_name: String::from("voucher"),
+                state_name: String::from("idle")
+            }
+        );
+        let rx = controller.insert_notice(mock_notice()).await;
+        assert_eq!(
+            rx.await.unwrap().unwrap_err(),
+            ControllerError::InvalidRequest {
+                request_name: String::from("notice"),
+                state_name: String::from("idle")
+            }
+        );
+        let rx = controller.insert_report(mock_report()).await;
+        assert_eq!(
+            rx.await.unwrap().unwrap_err(),
+            ControllerError::InvalidRequest {
+                request_name: String::from("report"),
+                state_name: String::from("idle")
+            }
+        );
+        let rx = controller.notify_exception(mock_exception()).await;
+        assert_eq!(
+            rx.await.unwrap().unwrap_err(),
+            ControllerError::InvalidRequest {
+                request_name: String::from("exception"),
+                state_name: String::from("idle")
+            }
+        );
+        controller.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_it_rejects_invalid_requests_in_fetch_request_state() {
+        let controller = setup();
+        // Set state to fetch request by calling finish once in another thread
+        let _ = controller.finish(FinishStatus::Accept).await;
+        let rx = controller.finish(FinishStatus::Accept).await;
+        assert_eq!(
+            rx.await.unwrap().unwrap_err(),
+            ControllerError::InvalidRequest {
+                request_name: String::from("finish"),
+                state_name: String::from("fetch request")
+            }
+        );
+        let rx = controller.insert_voucher(mock_voucher()).await;
+        assert_eq!(
+            rx.await.unwrap().unwrap_err(),
+            ControllerError::InvalidRequest {
+                request_name: String::from("voucher"),
+                state_name: String::from("fetch request")
+            }
+        );
+        let rx = controller.insert_notice(mock_notice()).await;
+        assert_eq!(
+            rx.await.unwrap().unwrap_err(),
+            ControllerError::InvalidRequest {
+                request_name: String::from("notice"),
+                state_name: String::from("fetch request")
+            }
+        );
+        let rx = controller.insert_report(mock_report()).await;
+        assert_eq!(
+            rx.await.unwrap().unwrap_err(),
+            ControllerError::InvalidRequest {
+                request_name: String::from("report"),
+                state_name: String::from("fetch request")
+            }
+        );
+        let rx = controller.notify_exception(mock_exception()).await;
+        assert_eq!(
+            rx.await.unwrap().unwrap_err(),
+            ControllerError::InvalidRequest {
+                request_name: String::from("exception"),
+                state_name: String::from("fetch request")
+            }
+        );
+        controller.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_it_rejects_invalid_requests_during_inspect() {
+        let controller = setup();
+        let _ = controller.inspect(mock_inspect_request()).await;
+        let _ = controller
+            .finish(FinishStatus::Accept)
+            .await
+            .await
+            .unwrap()
+            .unwrap();
+        let rx = controller.insert_voucher(mock_voucher()).await;
+        assert_eq!(
+            rx.await.unwrap().unwrap_err(),
+            ControllerError::InvalidRequest {
+                request_name: String::from("voucher"),
+                state_name: String::from("inspect")
+            }
+        );
+        let rx = controller.insert_notice(mock_notice()).await;
+        assert_eq!(
+            rx.await.unwrap().unwrap_err(),
+            ControllerError::InvalidRequest {
+                request_name: String::from("notice"),
+                state_name: String::from("inspect")
+            }
+        );
+        controller.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_it_advances_state_before_finish() {
+        let controller = setup();
+        // Send advance request
+        let advance_request = mock_advance_request();
+        let advance_rx = controller.advance(advance_request.clone()).await;
+        // Send first finish request
+        let finish_rx = controller.finish(FinishStatus::Accept).await;
+        let rollup_request = finish_rx.await.unwrap().unwrap();
+        assert_eq!(rollup_request, RollupRequest::AdvanceState(advance_request));
+        // Send second finish request
+        let _ = controller.finish(FinishStatus::Accept).await;
+        // Obtain result from advance request
+        let advance_result = advance_rx.await.unwrap().unwrap();
+        assert_eq!(advance_result.status, FinishStatus::Accept);
+        assert_eq!(advance_result.vouchers.len(), 0);
+        assert_eq!(advance_result.notices.len(), 0);
+        assert_eq!(advance_result.reports.len(), 0);
+        controller.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_it_advances_state_after_finish() {
+        let controller = setup();
+        // Send first finish request
+        let finish_rx = controller.finish(FinishStatus::Accept).await;
+        // Send advance request
+        let advance_request = mock_advance_request();
+        let advance_rx = controller.advance(advance_request.clone()).await;
+        // Receive first finish result
+        let rollup_request = finish_rx.await.unwrap().unwrap();
+        assert_eq!(rollup_request, RollupRequest::AdvanceState(advance_request));
+        // Send second finish request
+        let _ = controller.finish(FinishStatus::Accept).await;
+        // Obtain result from advance request
+        let advance_result = advance_rx.await.unwrap().unwrap();
+        assert_eq!(advance_result.status, FinishStatus::Accept);
+        assert_eq!(advance_result.vouchers.len(), 0);
+        assert_eq!(advance_result.notices.len(), 0);
+        assert_eq!(advance_result.reports.len(), 0);
+        controller.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_it_advances_state_after_previous_advance() {
+        let controller = setup();
+        const N: usize = 3;
+        let mut advance_requests = std::collections::VecDeque::new();
+        let mut advance_rxs = std::collections::VecDeque::new();
+        // Send several advance requests before starting
+        for _ in 0..N {
+            let request = mock_advance_request();
+            advance_requests.push_back(request.clone());
+            let rx = controller.advance(request).await;
+            advance_rxs.push_back(rx);
+        }
+        // Send first finish
+        let mut finish_rx = controller.finish(FinishStatus::Accept).await;
+        // Process each advance request
+        while !advance_requests.is_empty() {
+            let rollup_request = finish_rx.await.unwrap().unwrap();
+            let expected_request = advance_requests.pop_front().unwrap();
+            assert_eq!(
+                rollup_request,
+                RollupRequest::AdvanceState(expected_request)
+            );
+            finish_rx = controller.finish(FinishStatus::Accept).await;
+            let _ = advance_rxs.pop_front().unwrap().await.unwrap().unwrap();
+        }
+        controller.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_it_prioritizes_inspect_over_advance_requests() {
+        let controller = setup();
+        // Before first finish, send first an advance request and an inspect request
+        let _ = controller.advance(mock_advance_request()).await;
+        let _ = controller.inspect(mock_inspect_request()).await;
+        // The received request should be the inspect state
+        let finish_rx = controller.finish(FinishStatus::Accept).await;
+        let rollup_request = finish_rx.await.unwrap().unwrap();
+        assert!(matches!(rollup_request, RollupRequest::InspectState(_)));
+        controller.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_it_times_out_during_fetch_request() {
+        let controller = setup();
+        // Send first finish request without sending a rollup request
+        let finish_rx = controller.finish(FinishStatus::Accept).await;
+        let timeout_err = finish_rx.await.unwrap().unwrap_err();
+        assert_eq!(timeout_err, ControllerError::FetchRequestTimeout);
+        // Send an advance request that should not timeout
+        let advance_request = mock_advance_request();
+        let _ = controller.advance(advance_request.clone()).await;
+        let finish_rx = controller.finish(FinishStatus::Accept).await;
+        let rollup_request = finish_rx.await.unwrap().unwrap();
+        assert_eq!(rollup_request, RollupRequest::AdvanceState(advance_request));
+        controller.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_it_sends_vouchers_notices_and_reports_during_advance() {
+        let controller = setup();
+        // Set state to advance
+        let advance_rx = controller.advance(mock_advance_request()).await;
+        let finish_rx = controller.finish(FinishStatus::Accept).await;
+        let _ = finish_rx.await.unwrap().unwrap();
+        // Insert voucher
+        let voucher = mock_voucher();
+        let voucher_rx = controller.insert_voucher(voucher.clone()).await;
+        let voucher_id = voucher_rx.await.unwrap().unwrap();
+        assert_eq!(voucher_id, 0);
+        // Insert notice
+        let notice = mock_notice();
+        let notice_rx = controller.insert_notice(notice.clone()).await;
+        let notice_id = notice_rx.await.unwrap().unwrap();
+        assert_eq!(notice_id, 0);
+        // Insert report
+        let report = mock_report();
+        let report_rx = controller.insert_report(report.clone()).await;
+        report_rx.await.unwrap().unwrap();
+        // Finalize the current advance state
+        let _ = controller.finish(FinishStatus::Reject).await;
+        // Obtain the advance result
         let result = advance_rx.await.unwrap().unwrap();
-        assert_eq!(result, mock_result(FinishStatus::Accept));
-        controller.shutdown().await.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_it_sends_an_advance_request_and_dapp_returns_error() {
-        let (mut dapp, mut sequence) = setup();
-        let advance = expect_advance_request(&mut dapp, &mut sequence).await;
-        let controller = Controller::new(dapp);
-        let advance_rx = controller.advance(advance.request).await;
-        advance.received.notified().await;
-        advance.response_tx.send(Err(MockDAppError {})).unwrap();
-        controller.finish(FinishStatus::Accept).await;
-        let err = advance_rx.await.unwrap().unwrap_err();
-        assert_eq!(err, MockDAppError {});
-        controller.shutdown().await.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_it_sends_an_inspect_request_and_dapp_returns_ok() {
-        let (mut dapp, mut sequence) = setup();
-        let inspect = expect_inspect_request(&mut dapp, &mut sequence);
-        let controller = Controller::new(dapp);
-        let inspect_rx = controller.inspect(inspect.request).await;
-        let expected_reports = vec![mock_report()];
-        inspect
-            .response_tx
-            .send(Ok(expected_reports.clone()))
-            .unwrap();
-        let reports = inspect_rx.await.unwrap().unwrap();
-        assert!(reports == expected_reports);
-        controller.shutdown().await.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_it_sends_an_inspect_request_and_dapp_returns_error() {
-        let (mut dapp, mut sequence) = setup();
-        let inspect = expect_inspect_request(&mut dapp, &mut sequence);
-        let controller = Controller::new(dapp);
-        let inspect_rx = controller.inspect(inspect.request).await;
-        inspect.response_tx.send(Err(MockDAppError {})).unwrap();
-        let err = inspect_rx.await.unwrap().unwrap_err();
-        assert_eq!(err, MockDAppError {});
-        controller.shutdown().await.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_it_processes_multiple_advance_requests() {
-        let (mut dapp, mut sequence) = setup();
-        let mut advances: Vec<MockAdvance> = Vec::new();
-        for _ in 0..3 {
-            advances.push(expect_advance_request(&mut dapp, &mut sequence).await);
-        }
-        let controller = Controller::new(dapp);
-        for advance in advances {
-            let advance_rx = controller.advance(advance.request).await;
-            advance.received.notified().await;
-            advance.response_tx.send(Ok(())).unwrap();
-            controller.finish(FinishStatus::Accept).await;
-            let result = advance_rx.await.unwrap().unwrap();
-            assert_eq!(result, mock_result(FinishStatus::Accept));
-        }
-        controller.shutdown().await.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_it_prioritizes_inspect_requests_over_advance_requests() {
-        let (mut dapp, mut sequence) = setup();
-        let first_advance = expect_advance_request(&mut dapp, &mut sequence).await;
-        let inspect = expect_inspect_request(&mut dapp, &mut sequence);
-        let second_advance = expect_advance_request(&mut dapp, &mut sequence).await;
-        let controller = Controller::new(dapp);
-        // Wait for the first advance to start
-        let first_advance_rx = controller.advance(first_advance.request).await;
-        first_advance.received.notified().await;
-        first_advance.response_tx.send(Ok(())).unwrap();
-        // Send both an advance and an inspect while processing the first advance
-        let second_advance_rx = controller.advance(second_advance.request).await;
-        let inspect_rx = controller.inspect(inspect.request).await;
-        // Finish the first advance
-        controller.finish(FinishStatus::Accept).await;
-        let result = first_advance_rx.await.unwrap().unwrap();
-        assert_eq!(result, mock_result(FinishStatus::Accept));
-        // Wait for the inspect to finish before the second advance
-        let expected_reports = vec![mock_report()];
-        inspect
-            .response_tx
-            .send(Ok(expected_reports.clone()))
-            .unwrap();
-        let reports = inspect_rx.await.unwrap().unwrap();
-        assert!(reports == expected_reports);
-        // Then wait for the second advance and finish it
-        second_advance.received.notified().await;
-        second_advance.response_tx.send(Ok(())).unwrap();
-        controller.finish(FinishStatus::Accept).await;
-        let result = second_advance_rx.await.unwrap().unwrap();
-        assert_eq!(result, mock_result(FinishStatus::Accept));
-        controller.shutdown().await.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_it_rejects_vouchers_and_notices_when_idle() {
-        let (dapp, _) = setup();
-        let controller = Controller::new(dapp);
-        let insert_rx = controller.insert_voucher(mock_voucher()).await;
-        let err = insert_rx.await.unwrap().unwrap_err();
-        assert_eq!(err, InsertError {});
-        let insert_rx = controller.insert_notice(mock_notice()).await;
-        let err = insert_rx.await.unwrap().unwrap_err();
-        assert_eq!(err, InsertError {});
-        controller.shutdown().await.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_it_receives_vouchers_notices_and_reports() {
-        let (mut dapp, mut sequence) = setup();
-        let advance = expect_advance_request(&mut dapp, &mut sequence).await;
-        let controller = Controller::new(dapp);
-        let expected_result = AdvanceResult::new(
-            FinishStatus::Reject,
-            vec![mock_voucher(), mock_voucher()],
-            vec![mock_notice(), mock_notice()],
-            vec![mock_report(), mock_report()],
+        assert_eq!(
+            result,
+            AdvanceResult::new(
+                FinishStatus::Reject,
+                vec![voucher],
+                vec![notice],
+                vec![report]
+            )
         );
-        let advance_rx = controller.advance(advance.request).await;
-        advance.received.notified().await;
-        advance.response_tx.send(Ok(())).unwrap();
-        for (expected_id, voucher) in expected_result.vouchers.iter().enumerate() {
-            let insert_rx = controller.insert_voucher(voucher.clone()).await;
-            let obtained_id = insert_rx.await.unwrap().unwrap();
-            assert_eq!(obtained_id, expected_id as u64);
-        }
-        for (expected_id, notice) in expected_result.notices.iter().enumerate() {
-            let insert_rx = controller.insert_notice(notice.clone()).await;
-            let obtained_id = insert_rx.await.unwrap().unwrap();
-            assert_eq!(obtained_id, expected_id as u64);
-        }
-        for report in expected_result.reports.iter() {
-            controller.insert_report(report.clone()).await;
-        }
-        controller.finish(FinishStatus::Reject).await;
-        let obtained_result = advance_rx.await.unwrap().unwrap();
-        assert_eq!(obtained_result, expected_result);
-        controller.shutdown().await.await.unwrap();
+        controller.shutdown().await;
     }
 
     #[tokio::test]
-    async fn test_it_accepts_vouchers_and_notices_before_advance_response() {
-        let (mut dapp, mut sequence) = setup();
-        let advance = expect_advance_request(&mut dapp, &mut sequence).await;
-        let controller = Controller::new(dapp);
-        let expected_result = AdvanceResult::new(
-            FinishStatus::Reject,
-            vec![mock_voucher(), mock_voucher()],
-            vec![mock_notice(), mock_notice()],
-            vec![mock_report(), mock_report()],
+    async fn test_it_sends_reports_during_inspect() {
+        let controller = setup();
+        // Set state to inspect
+        let inspect_rx = controller.inspect(mock_inspect_request()).await;
+        let finish_rx = controller.finish(FinishStatus::Accept).await;
+        let _ = finish_rx.await.unwrap().unwrap();
+        // Insert report
+        let report = mock_report();
+        let report_rx = controller.insert_report(report.clone()).await;
+        report_rx.await.unwrap().unwrap();
+        // Finalize the current advance state
+        let _ = controller.finish(FinishStatus::Accept).await;
+        // Obtain the inspect result
+        let result = inspect_rx.await.unwrap().unwrap();
+        assert_eq!(
+            result,
+            InspectResult {
+                reports: vec![report]
+            }
         );
-        let advance_rx = controller.advance(advance.request).await;
-        advance.received.notified().await;
-        for (expected_id, voucher) in expected_result.vouchers.iter().enumerate() {
-            let insert_rx = controller.insert_voucher(voucher.clone()).await;
-            let obtained_id = insert_rx.await.unwrap().unwrap();
-            assert_eq!(obtained_id, expected_id as u64);
-        }
-        for (expected_id, notice) in expected_result.notices.iter().enumerate() {
-            let insert_rx = controller.insert_notice(notice.clone()).await;
-            let obtained_id = insert_rx.await.unwrap().unwrap();
-            assert_eq!(obtained_id, expected_id as u64);
-        }
-        for report in expected_result.reports.iter() {
-            controller.insert_report(report.clone()).await;
-        }
-        controller.finish(FinishStatus::Reject).await;
-        // Only respond to advance after sending a finish response
-        advance.response_tx.send(Ok(())).unwrap();
-        let obtained_result = advance_rx.await.unwrap().unwrap();
-        assert_eq!(obtained_result, expected_result);
-        controller.shutdown().await.await.unwrap();
+        controller.shutdown().await;
     }
 
-    fn mock_advance_request() -> AdvanceRequest {
-        AdvanceRequest {
-            metadata: AdvanceMetadata {
-                msg_sender: rand::random(),
-                epoch_index: rand::random(),
-                input_index: rand::random(),
-                block_number: rand::random(),
-                time_stamp: rand::random(),
-            },
-            payload: rand::random::<[u8; 32]>().into(),
-        }
+    #[tokio::test]
+    async fn test_it_handles_exception_during_advance() {
+        let controller = setup();
+        // Set state to advance
+        let advance_rx = controller.advance(mock_advance_request()).await;
+        let finish_rx = controller.finish(FinishStatus::Accept).await;
+        let _ = finish_rx.await.unwrap().unwrap();
+        // Send rollup exception
+        let exception = mock_exception();
+        let exception_rx = controller.notify_exception(exception.clone()).await;
+        exception_rx.await.unwrap().unwrap();
+        let result = advance_rx.await.unwrap().unwrap_err();
+        assert_eq!(exception, result);
+        controller.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_it_handles_exception_during_inspect() {
+        let controller = setup();
+        // Set state to inspect
+        let inspect_rx = controller.inspect(mock_inspect_request()).await;
+        let finish_rx = controller.finish(FinishStatus::Accept).await;
+        let _ = finish_rx.await.unwrap().unwrap();
+        // Send rollup exception
+        let exception = mock_exception();
+        let exception_rx = controller.notify_exception(exception.clone()).await;
+        exception_rx.await.unwrap().unwrap();
+        let result = inspect_rx.await.unwrap().unwrap_err();
+        assert_eq!(exception, result);
+        controller.shutdown().await;
     }
 
     fn mock_voucher() -> Voucher {
@@ -695,58 +887,28 @@ mod tests {
         }
     }
 
-    fn mock_result(status: FinishStatus) -> AdvanceResult {
-        AdvanceResult::new(status, vec![], vec![], vec![])
-    }
-
-    struct MockAdvance {
-        request: AdvanceRequest,
-        received: Arc<Notify>,
-        response_tx: oneshot::Sender<Result<(), MockDAppError>>,
-    }
-
-    async fn expect_advance_request(dapp: &mut MockDApp, sequence: &mut Sequence) -> MockAdvance {
-        let request = mock_advance_request();
-        let received = Arc::new(Notify::new());
-        let notify = received.clone();
-        let (response_tx, response_rx) = oneshot::channel();
-        dapp.expect_advance()
-            .times(1)
-            .with(eq(request.clone()))
-            .in_sequence(sequence)
-            .return_once(move |_| {
-                notify.notify_one();
-                response_rx
-            });
-        MockAdvance {
-            request,
-            received,
-            response_tx,
-        }
-    }
-
-    struct MockInspect {
-        request: InspectRequest,
-        response_tx: oneshot::Sender<Result<Vec<Report>, MockDAppError>>,
-    }
-
-    fn expect_inspect_request(dapp: &mut MockDApp, sequence: &mut Sequence) -> MockInspect {
-        let request = InspectRequest {
+    fn mock_exception() -> RollupException {
+        RollupException {
             payload: rand::random::<[u8; 32]>().into(),
-        };
-        let (response_tx, response_rx) = oneshot::channel();
-        dapp.expect_inspect()
-            .times(1)
-            .with(eq(request.clone()))
-            .in_sequence(sequence)
-            .return_once(move |_| response_rx);
-        MockInspect {
-            request,
-            response_tx,
         }
     }
 
-    #[derive(Debug, Snafu, PartialEq)]
-    #[snafu(display("mock dapp error"))]
-    pub struct MockDAppError {}
+    fn mock_advance_request() -> AdvanceStateRequest {
+        AdvanceStateRequest {
+            metadata: AdvanceMetadata {
+                msg_sender: rand::random(),
+                epoch_index: rand::random(),
+                input_index: rand::random(),
+                block_number: rand::random(),
+                timestamp: rand::random(),
+            },
+            payload: rand::random::<[u8; 32]>().into(),
+        }
+    }
+
+    fn mock_inspect_request() -> InspectStateRequest {
+        InspectStateRequest {
+            payload: rand::random::<[u8; 32]>().into(),
+        }
+    }
 }

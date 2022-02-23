@@ -21,7 +21,7 @@ use proto::server_manager::server_manager_server::ServerManagerServer;
 use server_manager::ServerManagerService;
 
 use crate::config::Config;
-use crate::dapp_client::Controller;
+use crate::controller::Controller;
 
 pub async fn start_service<F: Future<Output = ()>>(
     config: &Config,

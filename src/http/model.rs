@@ -22,7 +22,7 @@ pub struct HttpAdvanceMetadata {
     pub epoch_index: u64,
     pub input_index: u64,
     pub block_number: u64,
-    pub time_stamp: u64,
+    pub timestamp: u64,
 }
 
 impl From<AdvanceMetadata> for HttpAdvanceMetadata {
@@ -32,20 +32,20 @@ impl From<AdvanceMetadata> for HttpAdvanceMetadata {
             epoch_index: metadata.epoch_index,
             input_index: metadata.input_index,
             block_number: metadata.block_number,
-            time_stamp: metadata.time_stamp,
+            timestamp: metadata.timestamp,
         }
     }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct HttpAdvanceRequest {
+pub struct HttpAdvanceStateRequest {
     pub metadata: HttpAdvanceMetadata,
     pub payload: String,
 }
 
-impl From<AdvanceRequest> for HttpAdvanceRequest {
-    fn from(request: AdvanceRequest) -> HttpAdvanceRequest {
-        HttpAdvanceRequest {
+impl From<AdvanceStateRequest> for HttpAdvanceStateRequest {
+    fn from(request: AdvanceStateRequest) -> HttpAdvanceStateRequest {
+        HttpAdvanceStateRequest {
             metadata: request.metadata.into(),
             payload: conversions::encode_ethereum_binary(&request.payload),
         }
@@ -53,8 +53,51 @@ impl From<AdvanceRequest> for HttpAdvanceRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct HttpInspectResponse {
+pub struct HttpInspectStateRequest {
+    pub payload: String,
+}
+
+impl From<InspectStateRequest> for HttpInspectStateRequest {
+    fn from(request: InspectStateRequest) -> HttpInspectStateRequest {
+        HttpInspectStateRequest {
+            payload: conversions::encode_ethereum_binary(&request.payload),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "request_type")]
+pub enum HttpRollupRequest {
+    #[serde(rename = "advance_state")]
+    AdvanceState { data: HttpAdvanceStateRequest },
+    #[serde(rename = "inspect_state")]
+    InspectState { data: HttpInspectStateRequest },
+}
+
+impl From<RollupRequest> for HttpRollupRequest {
+    fn from(request: RollupRequest) -> HttpRollupRequest {
+        match request {
+            RollupRequest::AdvanceState(request) => HttpRollupRequest::AdvanceState {
+                data: request.into(),
+            },
+            RollupRequest::InspectState(request) => HttpRollupRequest::InspectState {
+                data: request.into(),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct HttpInspectResult {
     pub reports: Vec<HttpReport>,
+}
+
+impl From<InspectResult> for HttpInspectResult {
+    fn from(request: InspectResult) -> HttpInspectResult {
+        HttpInspectResult {
+            reports: request.reports.into_iter().map(HttpReport::from).collect(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -130,8 +173,17 @@ impl TryFrom<HttpReport> for Report {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct HttpIndexResponse {
-    pub index: u64,
+pub struct HttpRollupException {
+    pub payload: String,
+}
+
+impl TryFrom<HttpRollupException> for RollupException {
+    type Error = DecodeError;
+    fn try_from(report: HttpRollupException) -> Result<RollupException, DecodeError> {
+        Ok(RollupException {
+            payload: conversions::decode_ethereum_binary(&report.payload)?,
+        })
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -148,6 +200,11 @@ impl TryFrom<HttpFinishRequest> for FinishStatus {
             _ => Err(DecodeStatusError {}),
         }
     }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct HttpIndexResponse {
+    pub index: u64,
 }
 
 #[derive(Debug, Snafu)]

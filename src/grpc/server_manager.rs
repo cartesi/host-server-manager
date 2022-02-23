@@ -14,24 +14,25 @@ use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
 
-use crate::dapp_client::Controller;
+use crate::controller::Controller;
 use crate::hash::Hash;
 use crate::merkle_tree::{complete::Tree, proof::Proof, Error as MerkleTreeError};
 use crate::model::{
-    AdvanceMetadata, AdvanceRequest, AdvanceResult, FinishStatus, Notice, Report, Voucher,
+    AdvanceMetadata, AdvanceResult, AdvanceStateRequest, FinishStatus, Notice, Report, Voucher,
 };
 use crate::proofs::compute_proofs;
 
 use super::proto::cartesi_machine::{
-    machine_request::MachineOneof, Hash as GrpcHash, MerkleTreeProof as GrpcMerkleTreeProof, Void,
+    Hash as GrpcHash, MerkleTreeProof as GrpcMerkleTreeProof, Void,
 };
 use super::proto::server_manager::{
     processed_input::ProcessedOneof, server_manager_server::ServerManager, Address,
-    AdvanceStateRequest, CompletionStatus, EndSessionRequest, EpochState, FinishEpochRequest,
-    GetEpochStatusRequest, GetEpochStatusResponse, GetSessionStatusRequest,
-    GetSessionStatusResponse, GetStatusResponse, InputResult, InspectStateRequest,
-    InspectStateResponse, Notice as GrpcNotice, ProcessedInput, Report as GrpcReport,
-    StartSessionRequest, StartSessionResponse, TaintStatus, Voucher as GrpcVoucher,
+    AdvanceStateRequest as GrpcAdvanceStateRequest, CompletionStatus, EndSessionRequest,
+    EpochState, FinishEpochRequest, GetEpochStatusRequest, GetEpochStatusResponse,
+    GetSessionStatusRequest, GetSessionStatusResponse, GetStatusResponse, InputResult,
+    InspectStateRequest, InspectStateResponse, Notice as GrpcNotice, ProcessedInput,
+    Report as GrpcReport, StartSessionRequest, StartSessionResponse, TaintStatus,
+    Voucher as GrpcVoucher,
 };
 use super::proto::versioning::{GetVersionResponse, SemanticVersion};
 
@@ -71,37 +72,11 @@ impl ServerManager for ServerManagerService {
     ) -> Result<Response<StartSessionResponse>, Status> {
         let request = request.into_inner();
         log::info!("received start_session with id={}", request.session_id);
-        let machine_oneof = request
-            .machine
-            .ok_or(Status::invalid_argument("missing machine from request"))?
-            .machine_oneof
-            .ok_or(Status::invalid_argument(
-                "missing machine_oneof from machine",
-            ))?;
-        let memory_range_config = match machine_oneof {
-            MachineOneof::Directory(_) => {
-                log::warn!("loading machine from directory; ignoring config");
-                MemoryRangeConfig::new(0, 0)
-            }
-            MachineOneof::Config(config) => {
-                let rollup = config
-                    .rollup
-                    .ok_or(Status::invalid_argument("missing rollup from config"))?;
-                let voucher_hashes = rollup.voucher_hashes.ok_or(Status::invalid_argument(
-                    "missing voucher_hashes from rollup",
-                ))?;
-                let notice_hashes = rollup.notice_hashes.ok_or(Status::invalid_argument(
-                    "missing notice_hashes from rollup",
-                ))?;
-                MemoryRangeConfig::new(voucher_hashes.start as usize, notice_hashes.start as usize)
-            }
-        };
         self.sessions
             .try_set_session(
                 request.session_id,
                 request.active_epoch_index,
                 self.controller.clone(),
-                memory_range_config,
             )
             .await?;
         let response = StartSessionResponse { config: None };
@@ -120,7 +95,7 @@ impl ServerManager for ServerManagerService {
 
     async fn advance_state(
         &self,
-        request: Request<AdvanceStateRequest>,
+        request: Request<GrpcAdvanceStateRequest>,
     ) -> Result<Response<Void>, Status> {
         let request = request.into_inner();
         log::info!("received advance_state with id={}", request.session_id);
@@ -139,13 +114,13 @@ impl ServerManager for ServerManagerService {
         if metadata.input_index != request.current_input_index {
             return Err(Status::invalid_argument("metadata input index mismatch"));
         }
-        let advance_request = AdvanceRequest {
+        let advance_request = AdvanceStateRequest {
             metadata: AdvanceMetadata {
                 msg_sender,
                 epoch_index: metadata.epoch_index,
                 input_index: metadata.input_index,
                 block_number: metadata.block_number,
-                time_stamp: metadata.time_stamp,
+                timestamp: metadata.timestamp,
             },
             payload: request.input_payload,
         };
@@ -253,7 +228,6 @@ impl SessionManager {
         session_id: String,
         active_epoch_index: u64,
         controller: Controller,
-        memory_range_config: MemoryRangeConfig,
     ) -> Result<(), Status> {
         if session_id == "" {
             return Err(Status::invalid_argument("session id is empty"));
@@ -269,7 +243,6 @@ impl SessionManager {
                     session_id,
                     active_epoch_index,
                     controller,
-                    memory_range_config,
                 ));
                 Ok(())
             }
@@ -312,19 +285,10 @@ struct SessionEntry {
 }
 
 impl SessionEntry {
-    fn new(
-        id: String,
-        active_epoch_index: u64,
-        controller: Controller,
-        memory_range_config: MemoryRangeConfig,
-    ) -> Self {
+    fn new(id: String, active_epoch_index: u64, controller: Controller) -> Self {
         Self {
             id,
-            session: Arc::new(Mutex::new(Session::new(
-                active_epoch_index,
-                controller,
-                memory_range_config,
-            ))),
+            session: Arc::new(Mutex::new(Session::new(active_epoch_index, controller))),
         }
     }
 
@@ -344,24 +308,18 @@ impl SessionEntry {
 struct Session {
     active_epoch_index: u64,
     controller: Controller,
-    memory_range_config: MemoryRangeConfig,
     epochs: HashMap<u64, Arc<Mutex<Epoch>>>,
     tainted: Arc<Mutex<Option<Status>>>,
 }
 
 impl Session {
-    fn new(
-        active_epoch_index: u64,
-        controller: Controller,
-        memory_range_config: MemoryRangeConfig,
-    ) -> Self {
-        let epoch = Arc::new(Mutex::new(Epoch::new(memory_range_config.clone())));
+    fn new(active_epoch_index: u64, controller: Controller) -> Self {
+        let epoch = Arc::new(Mutex::new(Epoch::new()));
         let mut epochs = HashMap::new();
         epochs.insert(active_epoch_index, epoch);
         Self {
             active_epoch_index,
             controller,
-            memory_range_config,
             epochs,
             tainted: Arc::new(Mutex::new(None)),
         }
@@ -371,7 +329,7 @@ impl Session {
         &mut self,
         active_epoch_index: u64,
         current_input_index: u64,
-        advance_request: AdvanceRequest,
+        advance_request: AdvanceStateRequest,
     ) -> Result<(), Status> {
         self.check_epoch_index_overflow()?;
         self.check_tainted().await?;
@@ -420,16 +378,18 @@ impl Session {
             .await
             .try_finish(processed_input_count)?;
         self.active_epoch_index += 1;
-        let epoch = Arc::new(Mutex::new(Epoch::new(self.memory_range_config.clone())));
+        let epoch = Arc::new(Mutex::new(Epoch::new()));
         self.epochs.insert(self.active_epoch_index, epoch);
         Ok(())
     }
 
     async fn get_status(&self, session_id: String) -> GetSessionStatusResponse {
+        let mut epoch_index: Vec<u64> = self.epochs.keys().cloned().collect();
+        epoch_index.sort();
         GetSessionStatusResponse {
             session_id,
             active_epoch_index: self.active_epoch_index,
-            epoch_index: self.epochs.keys().cloned().collect(),
+            epoch_index,
             taint_status: self.get_taint_status().await,
         }
     }
@@ -519,11 +479,10 @@ struct Epoch {
     processed_inputs: Vec<AdvanceResult>,
     vouchers_tree: Tree,
     notices_tree: Tree,
-    memory_range_config: MemoryRangeConfig,
 }
 
 impl Epoch {
-    fn new(memory_range_config: MemoryRangeConfig) -> Self {
+    fn new() -> Self {
         Self {
             state: EpochState::Active,
             pending_inputs: 0,
@@ -532,7 +491,6 @@ impl Epoch {
                 .expect("cannot fail"),
             notices_tree: Tree::new(LOG2_ROOT_SIZE, LOG2_KECCAK_SIZE, LOG2_KECCAK_SIZE)
                 .expect("cannot fail"),
-            memory_range_config,
         }
     }
 
@@ -547,14 +505,10 @@ impl Epoch {
     fn add_processed_input(&mut self, mut result: AdvanceResult) -> Result<(), Status> {
         // Compute proofs and update vouchers and notices trees
         if result.status == FinishStatus::Accept {
-            let voucher_root = compute_proofs(
-                &mut result.vouchers,
-                self.memory_range_config.vouchers_start,
-            )?;
+            let voucher_root = compute_proofs(&mut result.vouchers)?;
             result.voucher_root = Some(voucher_root.clone());
             self.vouchers_tree.push(voucher_root)?;
-            let notice_root =
-                compute_proofs(&mut result.notices, self.memory_range_config.notices_start)?;
+            let notice_root = compute_proofs(&mut result.notices)?;
             result.notice_root = Some(notice_root.clone());
             self.notices_tree.push(notice_root)?;
         } else {
@@ -683,21 +637,6 @@ impl Epoch {
             ))
         } else {
             Ok(())
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct MemoryRangeConfig {
-    vouchers_start: usize,
-    notices_start: usize,
-}
-
-impl MemoryRangeConfig {
-    fn new(vouchers_start: usize, notices_start: usize) -> Self {
-        Self {
-            vouchers_start,
-            notices_start,
         }
     }
 }

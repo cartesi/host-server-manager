@@ -10,7 +10,7 @@
 # CONDITIONS OF ANY KIND, either express or implied. See the License for the
 # specific language governing permissions and limitations under the License.
 
-FROM rust:1.57 as builder
+FROM rust:1.59 as builder
 
 # Setup work directory
 WORKDIR /usr/src/
@@ -23,13 +23,13 @@ RUN rustup component add rustfmt
 # Build dependencies
 COPY ./Cargo.lock ./Cargo.lock
 COPY ./Cargo.toml ./Cargo.toml
+COPY ./third-party ./third-party
 RUN cargo build --release
 
 # Build application
 RUN rm ./target/release/deps/host_server_manager*
 RUN rm src/*.rs
 COPY ./src ./src
-COPY ./grpc-interfaces ./grpc-interfaces
 COPY ./build.rs ./build.rs
 RUN cargo install --path .
 

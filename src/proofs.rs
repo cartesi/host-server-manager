@@ -26,10 +26,7 @@ pub trait Proofable {
 }
 
 /// Update the merkle proofs of every proofable in the array and return the merkle-tree's root hash
-pub fn compute_proofs(
-    proofables: &mut [impl Proofable],
-    memory_range_start: usize,
-) -> Result<Hash, merkle_tree::Error> {
+pub fn compute_proofs(proofables: &mut [impl Proofable]) -> Result<Hash, merkle_tree::Error> {
     let mut hasher = Hasher::new();
     let mut leaves: Vec<Hash> = vec![];
     for proofable in proofables.iter() {
@@ -44,8 +41,7 @@ pub fn compute_proofs(
     }
     let tree = Tree::new_from_leaves(LOG2_ROOT_SIZE, LOG2_WORD_SIZE, LOG2_WORD_SIZE, leaves)?;
     for (i, proofable) in proofables.iter_mut().enumerate() {
-        let mut proof = tree.get_proof(i * (1 << LOG2_HASH_SIZE), LOG2_HASH_SIZE)?;
-        proof.target_address += memory_range_start;
+        let proof = tree.get_proof(i * (1 << LOG2_HASH_SIZE), LOG2_HASH_SIZE)?;
         proofable.set_proof(proof);
     }
     Ok(tree.get_root_hash().clone())

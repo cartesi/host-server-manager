@@ -13,7 +13,6 @@
 mod config;
 mod controller;
 mod conversions;
-mod dapp_client;
 mod driver;
 mod grpc;
 mod hash;
@@ -21,26 +20,26 @@ mod http;
 mod merkle_tree;
 mod model;
 mod proofs;
-mod sync_request;
 
 use futures_util::FutureExt;
 use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc};
+use std::time::Duration;
 use structopt::StructOpt;
 use tokio::sync::oneshot;
 
 use config::Config;
-use dapp_client::{Controller, DAppClient};
+use controller::Controller;
 
 #[actix_web::main]
 async fn main() {
-    // Set the default log level to info
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-
     let config = Config::from_args();
+
+    // Set the default log level to info
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(&config.log_level))
+        .init();
     log::info!("{:#?}", config);
 
-    let dapp_client = DAppClient::new(&config);
-    let controller = Controller::new(dapp_client);
+    let controller = Controller::new(Duration::from_millis(config.finish_timeout));
     let http_service_running = Arc::new(AtomicBool::new(true));
     let (grpc_shutdown_tx, grpc_shutdown_rx) = oneshot::channel::<()>();
     let grpc_service = {

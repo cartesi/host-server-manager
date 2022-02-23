@@ -27,6 +27,8 @@ tonic = "0.6"
 [dev-dependencies]
 mockall = "0.11"
 rand = "0.8"
+serial_test = "0.6"
+rollup-http-client = { path = "third-party/machine-emulator-tools/linux/rollup/http/rollup-http-client" }
 
 [build-dependencies]
 tonic-build = "0.5"

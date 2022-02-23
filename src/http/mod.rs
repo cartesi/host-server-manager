@@ -10,18 +10,18 @@
 // CONDITIONS OF ANY KIND, either express or implied. See the License for the
 // specific language governing permissions and limitations under the License.
 
-mod dispatcher;
 pub mod errors;
 mod inspect;
 pub mod model;
+mod rollup_server;
 
 use crate::config::Config;
-use crate::dapp_client::Controller;
+use crate::controller::Controller;
 
 /// Setup the HTTP server that receives requests from the DApp backend
 pub async fn start_services(config: &Config, controller: Controller) -> std::io::Result<()> {
     tokio::try_join!(
-        dispatcher::start_service(config, controller.clone()),
+        rollup_server::start_service(config, controller.clone()),
         inspect::start_service(config, controller),
     )
     .map(|_| ())

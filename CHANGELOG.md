@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Compute hashes of vouchers and notices
 
+### Changed
+- Refactor Rollup HTTP API according to new OpenAPI interface
+
 ## [0.2.1] - 2022-01-18
 ### Changed
 - Change default port config

@@ -10,6 +10,7 @@
 // CONDITIONS OF ANY KIND, either express or implied. See the License for the
 // specific language governing permissions and limitations under the License.
 
+use crate::conversions;
 use crate::driver::{compute_notice_hash, compute_voucher_hash};
 use crate::hash::Hash;
 use crate::merkle_tree::proof::Proof;
@@ -18,18 +19,18 @@ use crate::proofs::Proofable;
 const ADDRESS_SIZE: usize = 20;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdvanceStateRequest {
+    pub metadata: AdvanceMetadata,
+    pub payload: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdvanceMetadata {
     pub msg_sender: [u8; ADDRESS_SIZE],
     pub epoch_index: u64,
     pub input_index: u64,
     pub block_number: u64,
-    pub time_stamp: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AdvanceRequest {
-    pub metadata: AdvanceMetadata,
-    pub payload: Vec<u8>,
+    pub timestamp: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,14 +66,25 @@ impl AdvanceResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InspectRequest {
+pub struct InspectStateRequest {
     pub payload: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InspectResult {
+    pub reports: Vec<Report>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FinishStatus {
     Accept,
     Reject,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RollupRequest {
+    AdvanceState(AdvanceStateRequest),
+    InspectState(InspectStateRequest),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,4 +148,19 @@ impl Proofable for Notice {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Report {
     pub payload: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RollupException {
+    pub payload: Vec<u8>,
+}
+
+impl std::fmt::Display for RollupException {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "rollup exception ({})",
+            conversions::encode_ethereum_binary(&self.payload)
+        )
+    }
 }
