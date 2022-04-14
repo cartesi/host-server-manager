@@ -376,7 +376,12 @@ impl State for FetchRequestState {
                 Some(AdvanceState::new(self.data, advance_response_tx))
             }
             Some(request) = self.data.finish_rx.recv() => {
-                Service::handle_invalid(request, self, "finish")
+                log::info!("received finish request; terminating previous finish request");
+                log::debug!("request: {:?}", request);
+                let timeout_err = ControllerError::FetchRequestTimeout;
+                send_response(self.finish_response_tx, Err(timeout_err));
+                let (_, response_tx) = request.into_inner();
+                Some(FetchRequestState::new(self.data, response_tx))
             }
             Some(request) = self.data.voucher_rx.recv() => {
                 Service::handle_invalid(request, self, "voucher")
@@ -603,18 +608,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_it_handles_multiple_finish_requests_at_the_same_time() {
+        let controller = setup();
+        let mut handlers = vec![];
+        const N: usize = 3;
+        for _ in 0..N {
+            let handler = {
+                let controller = controller.clone();
+                tokio::spawn(async move { controller.finish(FinishStatus::Accept).await })
+            };
+            handlers.push(handler);
+        }
+        for handler in handlers {
+            let rx = handler.await.unwrap();
+            let timeout_err = rx.await.unwrap().unwrap_err();
+            assert_eq!(timeout_err, ControllerError::FetchRequestTimeout);
+        }
+    }
+
+    #[tokio::test]
     async fn test_it_rejects_invalid_requests_in_fetch_request_state() {
         let controller = setup();
         // Set state to fetch request by calling finish once in another thread
         let _ = controller.finish(FinishStatus::Accept).await;
-        let rx = controller.finish(FinishStatus::Accept).await;
-        assert_eq!(
-            rx.await.unwrap().unwrap_err(),
-            ControllerError::InvalidRequest {
-                request_name: String::from("finish"),
-                state_name: String::from("fetch request")
-            }
-        );
         let rx = controller.insert_voucher(mock_voucher()).await;
         assert_eq!(
             rx.await.unwrap().unwrap_err(),

@@ -113,7 +113,7 @@ async fn test_it_finishes_current_advance_request() {
 
 #[tokio::test]
 #[serial_test::serial]
-async fn test_it_fails_to_finish_while_waiting_for_rollup_request() {
+async fn test_it_handles_finish_while_waiting_for_rollup_request() {
     let _manager = manager::Wrapper::new().await;
     let mut grpc_client = grpc_client::connect().await;
     grpc_client
@@ -121,15 +121,25 @@ async fn test_it_fails_to_finish_while_waiting_for_rollup_request() {
         .await
         .unwrap();
     // Peform the first finish call in another thread
-    tokio::spawn(http_client::finish("accept".into()));
+    let first_handler = tokio::spawn(http_client::finish("accept".into()));
     // Wait for a bit and perform another finish call before the previous one returned
     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    // Check the second finish response
     let err = http_client::finish("accept".into()).await.unwrap_err();
     assert_eq!(
         err,
         http_client::HttpError {
-            status: 400,
-            message: String::from("invalid request finish in fetch request state"),
+            status: 202,
+            message: String::from("no rollup request available"),
+        }
+    );
+    // Check the first finish response
+    let err = first_handler.await.unwrap().unwrap_err();
+    assert_eq!(
+        err,
+        http_client::HttpError {
+            status: 202,
+            message: String::from("no rollup request available"),
         }
     );
 }
