@@ -27,7 +27,7 @@ async fn test_it_gets_version() {
         grpc_client::GetVersionResponse {
             version: Some(grpc_client::SemanticVersion {
                 major: 0,
-                minor: 1,
+                minor: 2,
                 patch: 0,
                 pre_release: String::from(""),
                 build: String::from("host-server-manager"),

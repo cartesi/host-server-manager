@@ -57,7 +57,7 @@ impl ServerManager for ServerManagerService {
         let response = GetVersionResponse {
             version: Some(SemanticVersion {
                 major: 0,
-                minor: 1,
+                minor: 2,
                 patch: 0,
                 pre_release: String::from(""),
                 build: String::from("host-server-manager"),
