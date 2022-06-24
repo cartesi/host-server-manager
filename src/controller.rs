@@ -67,10 +67,7 @@ impl Controller {
         }
     }
 
-    pub async fn advance(
-        &self,
-        request: AdvanceStateRequest,
-    ) -> oneshot::Receiver<Result<AdvanceResult, RollupException>> {
+    pub async fn advance(&self, request: AdvanceStateRequest) -> oneshot::Receiver<AdvanceResult> {
         SyncRequest::send(&self.advance_tx, request).await
     }
 
@@ -173,22 +170,6 @@ impl Service {
         Some(state)
     }
 
-    fn handle_exception<T>(
-        request: SyncExceptionRequest,
-        state_response_tx: oneshot::Sender<Result<T, RollupException>>,
-        data: SharedStateData,
-    ) -> Option<Box<dyn State>>
-    where
-        T: std::fmt::Debug + Send + Sync,
-    {
-        log::info!("received exception request; setting state to idle");
-        log::debug!("request: {:?}", request);
-        let (exception, exception_response_tx) = request.into_inner();
-        send_response(state_response_tx, Err(exception));
-        send_response(exception_response_tx, Ok(()));
-        Some(IdleState::new(data))
-    }
-
     fn shutdown(request: SyncShutdownRequest) -> Option<Box<dyn State>> {
         log::info!("processing shutdown request");
         request.process(|_| ());
@@ -256,8 +237,7 @@ where
     }
 }
 
-type SyncAdvanceStateRequest =
-    SyncRequest<AdvanceStateRequest, Result<AdvanceResult, RollupException>>;
+type SyncAdvanceStateRequest = SyncRequest<AdvanceStateRequest, AdvanceResult>;
 type SyncInspectResult = SyncRequest<InspectStateRequest, Result<InspectResult, RollupException>>;
 type SyncFinishRequest = SyncRequest<FinishStatus, Result<RollupRequest, ControllerError>>;
 type SyncVoucherRequest = SyncRequest<Voucher, Result<usize, ControllerError>>;
@@ -451,7 +431,12 @@ impl State for InspectState {
                 Some(self)
             }
             Some(request) = self.data.exception_rx.recv() => {
-                Service::handle_exception(request, self.inspect_response_tx, self.data)
+                log::info!("received exception request; setting state to idle");
+                log::debug!("request: {:?}", request);
+                let (exception, exception_response_tx) = request.into_inner();
+                send_response(self.inspect_response_tx, Err(exception));
+                send_response(exception_response_tx, Ok(()));
+                Some(IdleState::new(self.data))
             }
             Some(request) = self.data.voucher_rx.recv() => {
                 Service::handle_invalid(request, self, "voucher")
@@ -473,7 +458,7 @@ impl State for InspectState {
 /// The controller waits for vouchers, notices, reports, exception, and finish
 struct AdvanceState {
     data: SharedStateData,
-    advance_response_tx: oneshot::Sender<Result<AdvanceResult, RollupException>>,
+    advance_response_tx: oneshot::Sender<AdvanceResult>,
     vouchers: Vec<Voucher>,
     notices: Vec<Notice>,
     reports: Vec<Report>,
@@ -482,7 +467,7 @@ struct AdvanceState {
 impl AdvanceState {
     fn new(
         data: SharedStateData,
-        advance_response_tx: oneshot::Sender<Result<AdvanceResult, RollupException>>,
+        advance_response_tx: oneshot::Sender<AdvanceResult>,
     ) -> Box<dyn State> {
         Box::new(Self {
             data,
@@ -503,13 +488,21 @@ impl State for AdvanceState {
                 log::info!("received finish request; changing state to fetch request");
                 log::debug!("request: {:?}", request);
                 let (status, response_tx) = request.into_inner();
-                let result = AdvanceResult::new(
-                    status,
-                    self.vouchers,
-                    self.notices,
-                    self.reports,
-                );
-                send_response(self.advance_response_tx, Ok(result));
+                let result = match status {
+                    FinishStatus::Accept => {
+                        AdvanceResult::accepted(
+                            self.vouchers,
+                            self.notices,
+                            self.reports,
+                        )
+                    },
+                    FinishStatus::Reject => {
+                        AdvanceResult::rejected(
+                            self.reports,
+                        )
+                    },
+                };
+                send_response(self.advance_response_tx, result);
                 Some(FetchRequestState::new(self.data, response_tx))
             }
             Some(request) = self.data.voucher_rx.recv() => {
@@ -540,7 +533,16 @@ impl State for AdvanceState {
                 Some(self)
             }
             Some(request) = self.data.exception_rx.recv() => {
-                Service::handle_exception(request, self.advance_response_tx, self.data)
+                log::info!("received exception request; setting state to idle");
+                log::debug!("request: {:?}", request);
+                let (exception, exception_response_tx) = request.into_inner();
+                let result = AdvanceResult::exception(
+                    exception,
+                    self.reports,
+                );
+                send_response(self.advance_response_tx, result);
+                send_response(exception_response_tx, Ok(()));
+                Some(IdleState::new(self.data))
             }
             Some(request) = self.data.shutdown_rx.recv() => {
                 Service::shutdown(request)
@@ -708,11 +710,11 @@ mod tests {
         // Send second finish request
         let _ = controller.finish(FinishStatus::Accept).await;
         // Obtain result from advance request
-        let advance_result = advance_rx.await.unwrap().unwrap();
-        assert_eq!(advance_result.status, FinishStatus::Accept);
-        assert_eq!(advance_result.vouchers.len(), 0);
-        assert_eq!(advance_result.notices.len(), 0);
-        assert_eq!(advance_result.reports.len(), 0);
+        let advance_result = advance_rx.await.unwrap();
+        assert_eq!(
+            advance_result,
+            AdvanceResult::accepted(vec![], vec![], vec![])
+        );
         controller.shutdown().await;
     }
 
@@ -730,11 +732,11 @@ mod tests {
         // Send second finish request
         let _ = controller.finish(FinishStatus::Accept).await;
         // Obtain result from advance request
-        let advance_result = advance_rx.await.unwrap().unwrap();
-        assert_eq!(advance_result.status, FinishStatus::Accept);
-        assert_eq!(advance_result.vouchers.len(), 0);
-        assert_eq!(advance_result.notices.len(), 0);
-        assert_eq!(advance_result.reports.len(), 0);
+        let advance_result = advance_rx.await.unwrap();
+        assert_eq!(
+            advance_result,
+            AdvanceResult::accepted(vec![], vec![], vec![])
+        );
         controller.shutdown().await;
     }
 
@@ -762,7 +764,7 @@ mod tests {
                 RollupRequest::AdvanceState(expected_request)
             );
             finish_rx = controller.finish(FinishStatus::Accept).await;
-            let _ = advance_rxs.pop_front().unwrap().await.unwrap().unwrap();
+            let _ = advance_rxs.pop_front().unwrap().await.unwrap();
         }
         controller.shutdown().await;
     }
@@ -820,16 +822,8 @@ mod tests {
         // Finalize the current advance state
         let _ = controller.finish(FinishStatus::Reject).await;
         // Obtain the advance result
-        let result = advance_rx.await.unwrap().unwrap();
-        assert_eq!(
-            result,
-            AdvanceResult::new(
-                FinishStatus::Reject,
-                vec![voucher],
-                vec![notice],
-                vec![report]
-            )
-        );
+        let result = advance_rx.await.unwrap();
+        assert_eq!(result, AdvanceResult::rejected(vec![report]));
         controller.shutdown().await;
     }
 
@@ -868,8 +862,8 @@ mod tests {
         let exception = mock_exception();
         let exception_rx = controller.notify_exception(exception.clone()).await;
         exception_rx.await.unwrap().unwrap();
-        let result = advance_rx.await.unwrap().unwrap_err();
-        assert_eq!(exception, result);
+        let advance_result = advance_rx.await.unwrap();
+        assert_eq!(advance_result, AdvanceResult::exception(exception, vec![]));
         controller.shutdown().await;
     }
 

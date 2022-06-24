@@ -181,10 +181,12 @@ async fn test_it_get_epoch_status_of_epoch_with_voucher_notice_and_report() {
             reports: vec![grpc_client::Report {
                 payload: vec![222, 173, 190, 239],
             }],
-            processed_oneof: Some(grpc_client::processed_input::ProcessedOneof::Result(
-                grpc_client::InputResult {
-                    voucher_hashes_in_machine: None,
-                    vouchers: vec![grpc_client::Voucher {
+            status: grpc_client::CompletionStatus::Accepted as i32,
+            processed_input_one_of: Some(
+                grpc_client::processed_input::ProcessedInputOneOf::AcceptedData(
+                    grpc_client::AcceptedData {
+                        voucher_hashes_in_machine: None,
+                        vouchers: vec![grpc_client::Voucher {
                         keccak: Some(decode_hash(
                             "93d99a3fafa9fbbeb13bf691823046b8587e55f59d74ad9f22576becc9d3cdd2",
                         )),
@@ -257,8 +259,8 @@ async fn test_it_get_epoch_status_of_epoch_with_voucher_notice_and_report() {
                         ],
                         }),
                     }],
-                    notice_hashes_in_machine: None,
-                    notices: vec![grpc_client::Notice {
+                        notice_hashes_in_machine: None,
+                        notices: vec![grpc_client::Notice {
                         keccak: Some(decode_hash(
                             "b15ecb08bb827d74358e99df23d69a2962e5a16c3c3dfd80f365078bf9a29f1d",
                         )),
@@ -325,8 +327,9 @@ async fn test_it_get_epoch_status_of_epoch_with_voucher_notice_and_report() {
                         ],
                         }),
                     }],
-                },
-            )),
+                    },
+                ),
+            ),
         }],
         pending_input_count: 0,
         taint_status: None,

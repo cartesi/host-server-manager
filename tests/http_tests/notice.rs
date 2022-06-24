@@ -30,11 +30,11 @@ async fn test_it_insert_notice_during_advance_state() {
     let processed = finish_advance_state(&mut grpc_client, "rollup session")
         .await
         .unwrap();
-    match processed.processed_oneof.unwrap() {
-        grpc_client::processed_input::ProcessedOneof::Result(result) => {
+    match processed.processed_input_one_of.unwrap() {
+        grpc_client::processed_input::ProcessedInputOneOf::AcceptedData(result) => {
             assert_eq!(result.notices.len(), N);
         }
-        grpc_client::processed_input::ProcessedOneof::SkipReason(_) => {
+        grpc_client::processed_input::ProcessedInputOneOf::ExceptionData(_) => {
             panic!("unexpected advance result");
         }
     }

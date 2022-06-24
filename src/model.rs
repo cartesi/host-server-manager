@@ -35,9 +35,7 @@ pub struct AdvanceMetadata {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdvanceResult {
-    pub status: FinishStatus,
-    pub vouchers: Vec<Voucher>,
-    pub notices: Vec<Notice>,
+    pub status: CompletionStatus,
     pub reports: Vec<Report>,
     pub voucher_hashes_in_epoch: Option<Proof>,
     pub voucher_root: Option<Hash>,
@@ -46,16 +44,23 @@ pub struct AdvanceResult {
 }
 
 impl AdvanceResult {
-    pub fn new(
-        status: FinishStatus,
-        vouchers: Vec<Voucher>,
-        notices: Vec<Notice>,
-        reports: Vec<Report>,
-    ) -> Self {
+    pub fn accepted(vouchers: Vec<Voucher>, notices: Vec<Notice>, reports: Vec<Report>) -> Self {
+        let status = CompletionStatus::Accepted { vouchers, notices };
+        Self::new(status, reports)
+    }
+
+    pub fn rejected(reports: Vec<Report>) -> Self {
+        Self::new(CompletionStatus::Rejected, reports)
+    }
+
+    pub fn exception(exception: RollupException, reports: Vec<Report>) -> Self {
+        let status = CompletionStatus::Exception { exception };
+        Self::new(status, reports)
+    }
+
+    fn new(status: CompletionStatus, reports: Vec<Report>) -> Self {
         Self {
             status,
-            vouchers,
-            notices,
             reports,
             voucher_hashes_in_epoch: None,
             voucher_root: None,
@@ -63,6 +68,18 @@ impl AdvanceResult {
             notice_root: None,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompletionStatus {
+    Accepted {
+        vouchers: Vec<Voucher>,
+        notices: Vec<Notice>,
+    },
+    Rejected,
+    Exception {
+        exception: RollupException,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Changed
 - Bumped machine-emulator-tools to 0.7.0
+- Bumped grpc-interfaces to 0.8.0
+- Changed exception handling
 
 ## [0.3.0] - 2022-04-20
 ### Added

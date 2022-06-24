@@ -12,50 +12,27 @@
 
 use crate::common::*;
 
-async fn get_taint_status(
-    grpc_client: &mut grpc_client::ServerManagerClient,
-    session_id: &str,
-) -> Option<grpc_client::TaintStatus> {
-    let mut taint_status = None;
-    const RETRIES: usize = 10;
-    for _ in 0..RETRIES {
-        let request = grpc_client::GetSessionStatusRequest {
-            session_id: session_id.into(),
-        };
-        taint_status = grpc_client
-            .get_session_status(request)
-            .await
-            .unwrap()
-            .into_inner()
-            .taint_status;
-        if taint_status.is_some() {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
-    taint_status
-}
-
 #[tokio::test]
 #[serial_test::serial]
 async fn test_it_notifies_exception_during_advance_state() {
     let _manager = manager::Wrapper::new().await;
     let mut grpc_client = grpc_client::connect().await;
     setup_advance_state(&mut grpc_client, "rollup session").await;
-    let payload = http_client::create_payload();
-    http_client::notify_exception(payload.clone())
+    let payload = create_payload();
+    http_client::notify_exception(http_client::convert_binary_to_hex(&payload))
         .await
         .unwrap();
-    let taint_status = get_taint_status(&mut grpc_client, "rollup session")
+    let processed = finish_advance_state(&mut grpc_client, "rollup session")
         .await
         .unwrap();
-    assert_eq!(
-        taint_status,
-        grpc_client::TaintStatus {
-            error_code: tonic::Code::Internal as i32,
-            error_message: format!("rollup exception ({})", payload),
+    match processed.processed_input_one_of.unwrap() {
+        grpc_client::processed_input::ProcessedInputOneOf::AcceptedData(_) => {
+            panic!("unexpected advance result");
         }
-    );
+        grpc_client::processed_input::ProcessedInputOneOf::ExceptionData(result) => {
+            assert_eq!(result, payload);
+        }
+    }
 }
 
 #[tokio::test]

@@ -18,7 +18,7 @@ use crate::controller::Controller;
 use crate::hash::Hash;
 use crate::merkle_tree::{complete::Tree, proof::Proof, Error as MerkleTreeError};
 use crate::model::{
-    AdvanceMetadata, AdvanceResult, AdvanceStateRequest, FinishStatus, Notice, Report, Voucher,
+    AdvanceMetadata, AdvanceResult, AdvanceStateRequest, CompletionStatus, Notice, Report, Voucher,
 };
 use crate::proofs::compute_proofs;
 
@@ -26,13 +26,13 @@ use super::proto::cartesi_machine::{
     Hash as GrpcHash, MerkleTreeProof as GrpcMerkleTreeProof, Void,
 };
 use super::proto::server_manager::{
-    processed_input::ProcessedOneof, server_manager_server::ServerManager, Address,
-    AdvanceStateRequest as GrpcAdvanceStateRequest, CompletionStatus, EndSessionRequest,
-    EpochState, FinishEpochRequest, GetEpochStatusRequest, GetEpochStatusResponse,
-    GetSessionStatusRequest, GetSessionStatusResponse, GetStatusResponse, InputResult,
-    InspectStateRequest, InspectStateResponse, Notice as GrpcNotice, ProcessedInput,
-    Report as GrpcReport, StartSessionRequest, StartSessionResponse, TaintStatus,
-    Voucher as GrpcVoucher,
+    processed_input::ProcessedInputOneOf, server_manager_server::ServerManager, AcceptedData,
+    Address, AdvanceStateRequest as GrpcAdvanceStateRequest,
+    CompletionStatus as GrpcCompletionStatus, EndSessionRequest, EpochState, FinishEpochRequest,
+    GetEpochStatusRequest, GetEpochStatusResponse, GetSessionStatusRequest,
+    GetSessionStatusResponse, GetStatusResponse, InspectStateRequest, InspectStateResponse,
+    Notice as GrpcNotice, ProcessedInput, Report as GrpcReport, StartSessionRequest,
+    StartSessionResponse, TaintStatus, Voucher as GrpcVoucher,
 };
 use super::proto::versioning::{GetVersionResponse, SemanticVersion};
 
@@ -345,18 +345,12 @@ impl Session {
         // Handle the advance response in another thread
         tokio::spawn(async move {
             match rx.await {
-                Ok(result) => match result {
-                    Ok(result) => {
-                        if let Err(e) = epoch.lock().await.add_processed_input(result) {
-                            log::error!("failed to add processed input; tainting session");
-                            *tainted.lock().await = Some(e);
-                        }
+                Ok(result) => {
+                    if let Err(e) = epoch.lock().await.add_processed_input(result) {
+                        log::error!("failed to add processed input; tainting session");
+                        *tainted.lock().await = Some(e);
                     }
-                    Err(e) => {
-                        log::error!("something went wrong; tainting session");
-                        *tainted.lock().await = Some(Status::internal(e.to_string()));
-                    }
-                },
+                }
                 Err(_) => {
                     log::error!("sender dropped the channel");
                 }
@@ -504,11 +498,11 @@ impl Epoch {
 
     fn add_processed_input(&mut self, mut result: AdvanceResult) -> Result<(), Status> {
         // Compute proofs and update vouchers and notices trees
-        if result.status == FinishStatus::Accept {
-            let voucher_root = compute_proofs(&mut result.vouchers)?;
+        if let CompletionStatus::Accepted { vouchers, notices } = &mut result.status {
+            let voucher_root = compute_proofs(vouchers)?;
             result.voucher_root = Some(voucher_root.clone());
             self.vouchers_tree.push(voucher_root)?;
-            let notice_root = compute_proofs(&mut result.notices)?;
+            let notice_root = compute_proofs(notices)?;
             result.notice_root = Some(notice_root.clone());
             self.notices_tree.push(notice_root)?;
         } else {
@@ -643,17 +637,6 @@ impl Epoch {
 
 impl From<(usize, AdvanceResult)> for ProcessedInput {
     fn from((index, result): (usize, AdvanceResult)) -> ProcessedInput {
-        let processed_oneof = Some(match result.status {
-            FinishStatus::Accept => ProcessedOneof::Result(InputResult {
-                voucher_hashes_in_machine: None,
-                vouchers: result.vouchers.into_iter().map(GrpcVoucher::from).collect(),
-                notice_hashes_in_machine: None,
-                notices: result.notices.into_iter().map(GrpcNotice::from).collect(),
-            }),
-            FinishStatus::Reject => {
-                ProcessedOneof::SkipReason(CompletionStatus::RejectedByMachine as i32)
-            }
-        });
         ProcessedInput {
             input_index: index as u64,
             most_recent_machine_hash: None,
@@ -661,8 +644,39 @@ impl From<(usize, AdvanceResult)> for ProcessedInput {
                 .voucher_hashes_in_epoch
                 .map(GrpcMerkleTreeProof::from),
             notice_hashes_in_epoch: result.notice_hashes_in_epoch.map(GrpcMerkleTreeProof::from),
+            status: (&result.status).into(),
+            processed_input_one_of: result.status.into(),
             reports: result.reports.into_iter().map(GrpcReport::from).collect(),
-            processed_oneof,
+        }
+    }
+}
+
+impl From<&CompletionStatus> for i32 {
+    fn from(status: &CompletionStatus) -> i32 {
+        let status = match status {
+            CompletionStatus::Accepted { .. } => GrpcCompletionStatus::Accepted,
+            CompletionStatus::Rejected => GrpcCompletionStatus::Rejected,
+            CompletionStatus::Exception { .. } => GrpcCompletionStatus::Exception,
+        };
+        status as i32
+    }
+}
+
+impl From<CompletionStatus> for Option<ProcessedInputOneOf> {
+    fn from(status: CompletionStatus) -> Option<ProcessedInputOneOf> {
+        match status {
+            CompletionStatus::Accepted { vouchers, notices } => {
+                Some(ProcessedInputOneOf::AcceptedData(AcceptedData {
+                    voucher_hashes_in_machine: None,
+                    vouchers: vouchers.into_iter().map(GrpcVoucher::from).collect(),
+                    notice_hashes_in_machine: None,
+                    notices: notices.into_iter().map(GrpcNotice::from).collect(),
+                }))
+            }
+            CompletionStatus::Rejected => None,
+            CompletionStatus::Exception { exception } => {
+                Some(ProcessedInputOneOf::ExceptionData(exception.payload))
+            }
         }
     }
 }

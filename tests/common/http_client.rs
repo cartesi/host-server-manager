@@ -43,16 +43,16 @@ pub struct IndexResponse {
     pub index: usize,
 }
 
-pub fn convert_binary_to_hex(payload: Vec<u8>) -> String {
+pub fn convert_binary_to_hex(payload: &Vec<u8>) -> String {
     String::from("0x") + &hex::encode(payload)
 }
 
 pub fn create_address() -> String {
-    convert_binary_to_hex(super::create_address())
+    convert_binary_to_hex(&super::create_address())
 }
 
 pub fn create_payload() -> String {
-    convert_binary_to_hex(super::create_payload())
+    convert_binary_to_hex(&super::create_payload())
 }
 
 pub async fn inspect(payload: String) -> Result<InspectStateResponse, HttpError> {

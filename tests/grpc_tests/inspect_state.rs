@@ -24,7 +24,6 @@ async fn test_it_fails_to_inspect_state() {
     let err = grpc_client
         .inspect_state(grpc_client::InspectStateRequest {
             session_id: "rollup session".into(),
-            active_epoch_index: 0,
             query_payload: create_payload(),
         })
         .await
