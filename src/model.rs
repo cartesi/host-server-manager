@@ -89,7 +89,38 @@ pub struct InspectStateRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InspectResult {
+    pub status: InspectStatus,
     pub reports: Vec<Report>,
+}
+
+impl InspectResult {
+    pub fn accepted(reports: Vec<Report>) -> Self {
+        Self {
+            status: InspectStatus::Accepted,
+            reports,
+        }
+    }
+
+    pub fn rejected(reports: Vec<Report>) -> Self {
+        Self {
+            status: InspectStatus::Rejected,
+            reports,
+        }
+    }
+
+    pub fn exception(reports: Vec<Report>, exception: RollupException) -> Self {
+        Self {
+            status: InspectStatus::Exception { exception },
+            reports,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InspectStatus {
+    Accepted,
+    Rejected,
+    Exception { exception: RollupException },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

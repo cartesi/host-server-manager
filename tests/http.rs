@@ -15,7 +15,6 @@ mod common;
 mod http_tests {
     mod exception;
     mod finish;
-    mod inspect;
     mod notice;
     mod report;
     mod voucher;

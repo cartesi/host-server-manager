@@ -71,10 +71,7 @@ impl Controller {
         SyncRequest::send(&self.advance_tx, request).await
     }
 
-    pub async fn inspect(
-        &self,
-        request: InspectStateRequest,
-    ) -> oneshot::Receiver<Result<InspectResult, RollupException>> {
+    pub async fn inspect(&self, request: InspectStateRequest) -> oneshot::Receiver<InspectResult> {
         SyncRequest::send(&self.inspect_tx, request).await
     }
 
@@ -238,7 +235,7 @@ where
 }
 
 type SyncAdvanceStateRequest = SyncRequest<AdvanceStateRequest, AdvanceResult>;
-type SyncInspectResult = SyncRequest<InspectStateRequest, Result<InspectResult, RollupException>>;
+type SyncInspectResult = SyncRequest<InspectStateRequest, InspectResult>;
 type SyncFinishRequest = SyncRequest<FinishStatus, Result<RollupRequest, ControllerError>>;
 type SyncVoucherRequest = SyncRequest<Voucher, Result<usize, ControllerError>>;
 type SyncNoticeRequest = SyncRequest<Notice, Result<usize, ControllerError>>;
@@ -389,14 +386,14 @@ impl State for FetchRequestState {
 /// The controller wait for reports, exception, and finish
 struct InspectState {
     data: SharedStateData,
-    inspect_response_tx: oneshot::Sender<Result<InspectResult, RollupException>>,
+    inspect_response_tx: oneshot::Sender<InspectResult>,
     reports: Vec<Report>,
 }
 
 impl InspectState {
     fn new(
         data: SharedStateData,
-        inspect_response_tx: oneshot::Sender<Result<InspectResult, RollupException>>,
+        inspect_response_tx: oneshot::Sender<InspectResult>,
     ) -> Box<dyn State> {
         Box::new(Self {
             data,
@@ -414,11 +411,12 @@ impl State for InspectState {
             Some(request) = self.data.finish_rx.recv() => {
                 log::info!("received finish request; changing state to fetch request");
                 log::debug!("request: {:?}", request);
-                let inspect_response = InspectResult {
-                    reports: self.reports,
+                let (status, response_tx) = request.into_inner();
+                let result = match status {
+                    FinishStatus::Accept => InspectResult::accepted(self.reports),
+                    FinishStatus::Reject => InspectResult::rejected(self.reports),
                 };
-                send_response(self.inspect_response_tx, Ok(inspect_response));
-                let (_, response_tx) = request.into_inner();
+                send_response(self.inspect_response_tx, result);
                 Some(FetchRequestState::new(self.data, response_tx))
             }
             Some(request) = self.data.report_rx.recv() => {
@@ -434,7 +432,8 @@ impl State for InspectState {
                 log::info!("received exception request; setting state to idle");
                 log::debug!("request: {:?}", request);
                 let (exception, exception_response_tx) = request.into_inner();
-                send_response(self.inspect_response_tx, Err(exception));
+                let result = InspectResult::exception(self.reports, exception);
+                send_response(self.inspect_response_tx, result);
                 send_response(exception_response_tx, Ok(()));
                 Some(IdleState::new(self.data))
             }
@@ -841,13 +840,8 @@ mod tests {
         // Finalize the current advance state
         let _ = controller.finish(FinishStatus::Accept).await;
         // Obtain the inspect result
-        let result = inspect_rx.await.unwrap().unwrap();
-        assert_eq!(
-            result,
-            InspectResult {
-                reports: vec![report]
-            }
-        );
+        let result = inspect_rx.await.unwrap();
+        assert_eq!(result, InspectResult::accepted(vec![report]));
         controller.shutdown().await;
     }
 
@@ -878,8 +872,8 @@ mod tests {
         let exception = mock_exception();
         let exception_rx = controller.notify_exception(exception.clone()).await;
         exception_rx.await.unwrap().unwrap();
-        let result = inspect_rx.await.unwrap().unwrap_err();
-        assert_eq!(exception, result);
+        let result = inspect_rx.await.unwrap();
+        assert_eq!(result, InspectResult::exception(vec![], exception));
         controller.shutdown().await;
     }
 

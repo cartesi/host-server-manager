@@ -39,20 +39,36 @@ async fn test_it_notifies_exception_during_advance_state() {
 #[serial_test::serial]
 async fn test_it_notifies_exception_during_inspect_state() {
     let _manager = manager::Wrapper::new().await;
-    let inspect_handle = tokio::spawn(http_client::inspect(http_client::create_payload()));
+    let mut grpc_client = grpc_client::connect().await;
+    grpc_client
+        .start_session(grpc_client::create_start_session_request("rollup session"))
+        .await
+        .unwrap();
+    let inspect_handle = tokio::spawn(async move {
+        grpc_client
+            .inspect_state(grpc_client::InspectStateRequest {
+                session_id: "rollup session".into(),
+                query_payload: create_payload(),
+            })
+            .await
+            .unwrap()
+            .into_inner()
+    });
     http_client::finish("accept".into()).await.unwrap();
-    let payload = http_client::create_payload();
-    http_client::notify_exception(payload.clone())
+    let payload = create_payload();
+    http_client::notify_exception(http_client::convert_binary_to_hex(&payload))
         .await
         .unwrap();
     let response = inspect_handle.await.unwrap();
-    assert_eq!(
-        response,
-        Err(http_client::HttpError {
-            status: 500,
-            message: format!("rollup exception ({})", payload),
-        })
-    );
+    let expected = grpc_client::InspectStateResponse {
+        session_id: String::from("rollup session"),
+        active_epoch_index: 0,
+        current_input_index: 0,
+        status: grpc_client::CompletionStatus::Exception as i32,
+        exception_data: Some(payload),
+        reports: vec![],
+    };
+    assert_eq!(response, expected);
 }
 
 #[tokio::test]

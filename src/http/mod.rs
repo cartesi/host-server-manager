@@ -11,7 +11,6 @@
 // specific language governing permissions and limitations under the License.
 
 pub mod errors;
-mod inspect;
 pub mod model;
 mod rollup_server;
 
@@ -20,9 +19,5 @@ use crate::controller::Controller;
 
 /// Setup the HTTP server that receives requests from the DApp backend
 pub async fn start_services(config: &Config, controller: Controller) -> std::io::Result<()> {
-    tokio::try_join!(
-        rollup_server::start_service(config, controller.clone()),
-        inspect::start_service(config, controller),
-    )
-    .map(|_| ())
+    rollup_server::start_service(config, controller.clone()).await
 }

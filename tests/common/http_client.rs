@@ -55,16 +55,6 @@ pub fn create_payload() -> String {
     convert_binary_to_hex(&super::create_payload())
 }
 
-pub async fn inspect(payload: String) -> Result<InspectStateResponse, HttpError> {
-    let url = format!(
-        "{}/inspect/{}",
-        config::get_http_inspect_address(),
-        &payload
-    );
-    let response = reqwest::get(url).await.unwrap();
-    handle_json_response(response).await
-}
-
 pub async fn finish(status: String) -> Result<RollupHttpRequest, HttpError> {
     let url = format!("{}/finish", config::get_http_rollup_server_address());
     let mut request = HashMap::new();

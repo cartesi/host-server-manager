@@ -36,7 +36,21 @@ async fn test_it_insert_report_during_advance_state() {
 #[serial_test::serial]
 async fn test_it_insert_report_during_inspect_state() {
     let _manager = manager::Wrapper::new().await;
-    let inspect_handle = tokio::spawn(http_client::inspect(http_client::create_payload()));
+    let mut grpc_client = grpc_client::connect().await;
+    grpc_client
+        .start_session(grpc_client::create_start_session_request("rollup session"))
+        .await
+        .unwrap();
+    let inspect_handle = tokio::spawn(async move {
+        grpc_client
+            .inspect_state(grpc_client::InspectStateRequest {
+                session_id: "rollup session".into(),
+                query_payload: create_payload(),
+            })
+            .await
+            .unwrap()
+            .into_inner()
+    });
     http_client::finish("accept".into()).await.unwrap();
     // Send a reports
     const N: usize = 3;
@@ -48,7 +62,7 @@ async fn test_it_insert_report_during_inspect_state() {
     // Perform final finish call
     tokio::spawn(http_client::finish("accept".into()));
     // Obtain the inspect result
-    let response = inspect_handle.await.unwrap().unwrap();
+    let response = inspect_handle.await.unwrap();
     assert_eq!(response.reports.len(), N);
 }
 

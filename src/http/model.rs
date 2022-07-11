@@ -88,19 +88,6 @@ impl From<RollupRequest> for HttpRollupRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct HttpInspectResult {
-    pub reports: Vec<HttpReport>,
-}
-
-impl From<InspectResult> for HttpInspectResult {
-    fn from(request: InspectResult) -> HttpInspectResult {
-        HttpInspectResult {
-            reports: request.reports.into_iter().map(HttpReport::from).collect(),
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
 pub struct HttpVoucher {
     pub address: String,
     pub payload: String,

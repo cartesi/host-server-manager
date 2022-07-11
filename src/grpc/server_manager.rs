@@ -18,7 +18,8 @@ use crate::controller::Controller;
 use crate::hash::Hash;
 use crate::merkle_tree::{complete::Tree, proof::Proof, Error as MerkleTreeError};
 use crate::model::{
-    AdvanceMetadata, AdvanceResult, AdvanceStateRequest, CompletionStatus, Notice, Report, Voucher,
+    AdvanceMetadata, AdvanceResult, AdvanceStateRequest, CompletionStatus, InspectStateRequest,
+    InspectStatus, Notice, Report, Voucher,
 };
 use crate::proofs::compute_proofs;
 
@@ -30,9 +31,9 @@ use super::proto::server_manager::{
     Address, AdvanceStateRequest as GrpcAdvanceStateRequest,
     CompletionStatus as GrpcCompletionStatus, EndSessionRequest, EpochState, FinishEpochRequest,
     GetEpochStatusRequest, GetEpochStatusResponse, GetSessionStatusRequest,
-    GetSessionStatusResponse, GetStatusResponse, InspectStateRequest, InspectStateResponse,
-    Notice as GrpcNotice, ProcessedInput, Report as GrpcReport, StartSessionRequest,
-    StartSessionResponse, TaintStatus, Voucher as GrpcVoucher,
+    GetSessionStatusResponse, GetStatusResponse, InspectStateRequest as GrpcInspectStateRequest,
+    InspectStateResponse, Notice as GrpcNotice, ProcessedInput, Report as GrpcReport,
+    StartSessionRequest, StartSessionResponse, TaintStatus, Voucher as GrpcVoucher,
 };
 use super::proto::versioning::{GetVersionResponse, SemanticVersion};
 
@@ -159,12 +160,18 @@ impl ServerManager for ServerManagerService {
 
     async fn inspect_state(
         &self,
-        _: Request<InspectStateRequest>,
+        request: Request<GrpcInspectStateRequest>,
     ) -> Result<tonic::Response<InspectStateResponse>, Status> {
-        log::warn!("received inspect_state (not implemented)");
-        Err(Status::unimplemented(
-            "the inspect state should be called from the HTTP API",
-        ))
+        let request = request.into_inner();
+        log::info!("received inspect_state with id={}", request.session_id);
+        self.sessions
+            .try_get_session(&request.session_id)
+            .await?
+            .try_lock()
+            .or(Err(Status::aborted("concurrent call in session")))?
+            .try_inspect(request.session_id, request.query_payload)
+            .await
+            .map(Response::new)
     }
 
     async fn get_status(&self, _: Request<Void>) -> Result<Response<GetStatusResponse>, Status> {
@@ -357,6 +364,36 @@ impl Session {
             }
         });
         Ok(())
+    }
+
+    async fn try_inspect(
+        &mut self,
+        session_id: String,
+        payload: Vec<u8>,
+    ) -> Result<InspectStateResponse, Status> {
+        self.check_tainted().await?;
+        let rx = self
+            .controller
+            .inspect(InspectStateRequest { payload })
+            .await;
+        let result = rx.await.map_err(|e| {
+            log::error!("sender dropped the channel ({})", e);
+            Status::internal("unexpected error during inspect")
+        })?;
+        let active_epoch_index = self.active_epoch_index;
+        let epoch = self.try_get_epoch(active_epoch_index)?;
+        let current_input_index = epoch.lock().await.get_current_input_index();
+        Ok(InspectStateResponse {
+            session_id,
+            active_epoch_index,
+            current_input_index,
+            status: (&result.status).into(),
+            exception_data: match result.status {
+                InspectStatus::Exception { exception } => Some(exception.payload),
+                _ => None,
+            },
+            reports: result.reports.into_iter().map(GrpcReport::from).collect(),
+        })
     }
 
     async fn try_finish_epoch(
@@ -570,6 +607,10 @@ impl Epoch {
         self.processed_inputs.len() as u64
     }
 
+    fn get_current_input_index(&self) -> u64 {
+        self.pending_inputs + self.get_num_processed_inputs()
+    }
+
     fn check_endable(&self) -> Result<(), Status> {
         self.check_pending_inputs()?;
         self.check_no_processed_inputs()?;
@@ -585,7 +626,7 @@ impl Epoch {
     }
 
     fn check_current_input_index(&self, current_input_index: u64) -> Result<(), Status> {
-        let epoch_current_input_index = self.pending_inputs + self.get_num_processed_inputs();
+        let epoch_current_input_index = self.get_current_input_index();
         if epoch_current_input_index != current_input_index {
             Err(Status::invalid_argument(format!(
                 "incorrect current input index (expected {}, got {})",
@@ -657,6 +698,17 @@ impl From<&CompletionStatus> for i32 {
             CompletionStatus::Accepted { .. } => GrpcCompletionStatus::Accepted,
             CompletionStatus::Rejected => GrpcCompletionStatus::Rejected,
             CompletionStatus::Exception { .. } => GrpcCompletionStatus::Exception,
+        };
+        status as i32
+    }
+}
+
+impl From<&InspectStatus> for i32 {
+    fn from(status: &InspectStatus) -> i32 {
+        let status = match status {
+            InspectStatus::Accepted => GrpcCompletionStatus::Accepted,
+            InspectStatus::Rejected => GrpcCompletionStatus::Rejected,
+            InspectStatus::Exception { .. } => GrpcCompletionStatus::Exception,
         };
         status as i32
     }

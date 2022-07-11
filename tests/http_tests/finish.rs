@@ -58,9 +58,19 @@ async fn test_it_finishes_after_inspect_request() {
         .start_session(grpc_client::create_start_session_request("rollup session"))
         .await
         .unwrap();
-    let payload = String::from("0xdeafbeef");
+    let query_payload = create_payload();
+    let payload = http_client::convert_binary_to_hex(&query_payload);
     // Perform the inspect request in another thread because it is blocking
-    tokio::spawn(http_client::inspect(payload.clone()));
+    tokio::spawn(async move {
+        grpc_client
+            .inspect_state(grpc_client::InspectStateRequest {
+                session_id: "rollup session".into(),
+                query_payload,
+            })
+            .await
+            .unwrap()
+            .into_inner()
+    });
     // Then perform the finish request
     let response = http_client::finish("accept".into()).await.unwrap();
     // Then compare the received request with the expected one
