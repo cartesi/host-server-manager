@@ -20,6 +20,11 @@ WORKDIR /usr/src/host-server-manager
 # Install rustfmt (required by tonic when building grpc interfaces)
 RUN rustup component add rustfmt
 
+# Install protoc version 3.20
+RUN export ARCH=$(uname -m | sed 's/aarch64/aarch_64/') && \
+    curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v3.20.1/protoc-3.20.1-linux-$ARCH.zip && \
+    unzip protoc-3.20.1-linux-$ARCH.zip -d /usr/local
+
 # Build dependencies
 COPY ./Cargo.lock ./Cargo.lock
 COPY ./Cargo.toml ./Cargo.toml
@@ -33,8 +38,13 @@ COPY ./src ./src
 COPY ./build.rs ./build.rs
 RUN cargo install --path .
 
+# Install grpc-health-probe
+FROM golang:buster as grpc_health_probe
+RUN go install github.com/grpc-ecosystem/grpc-health-probe@2ff33ce40f97594e25068ca634d657b6aac4f72a
+
 # Build final image
 FROM debian:buster-slim
 RUN apt-get update && apt-get install -y libssl1.1 && rm -rf /var/lib/apt/lists/*
+COPY --from=grpc_health_probe /go/bin/grpc-health-probe /usr/local/bin/grpc-health-probe
 COPY --from=builder /usr/local/cargo/bin/host-server-manager /usr/local/bin/host-server-manager
 CMD ["host-server-manager"]

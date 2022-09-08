@@ -16,12 +16,25 @@ mod server_manager;
 use futures_util::FutureExt;
 use std::future::Future;
 use tonic::transport::Server;
+use tonic_health::proto::health_server::{Health, HealthServer};
 
 use proto::server_manager::server_manager_server::ServerManagerServer;
 use server_manager::ServerManagerService;
 
 use crate::config::Config;
 use crate::controller::Controller;
+
+/// Create the grpc healthcheck for the host-server-manager
+///
+/// Since the host-server-manager doesn't rely on any other service to function, it is always
+/// healthy.
+async fn create_health_service() -> HealthServer<impl Health> {
+    let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
+    health_reporter
+        .set_serving::<ServerManagerServer<ServerManagerService>>()
+        .await;
+    health_service
+}
 
 pub async fn start_service<F: Future<Output = ()>>(
     config: &Config,
@@ -36,6 +49,7 @@ pub async fn start_service<F: Future<Output = ()>>(
     .expect("invalid config");
     let service = ServerManagerService::new(controller);
     Server::builder()
+        .add_service(create_health_service().await)
         .add_service(ServerManagerServer::new(service))
         .serve_with_shutdown(addr, signal.map(|_| ()))
         .await
