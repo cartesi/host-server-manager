@@ -8,7 +8,7 @@ name = "host-server-manager"
 path = "src/main.rs"
 
 [dependencies]
-actix-web = "4.1"
+actix-web = "4.2"
 async-trait = "0.1"
 byteorder = "1.4"
 env_logger = "0.9"
@@ -21,14 +21,14 @@ serde = { version = "1.0", features = ["derive"] }
 sha3 = { version = "0.10", features = ["std"] }
 snafu = "0.6"
 structopt = "0.3"
-tokio = { version = "1.21", features = ["macros", "time", "rt-multi-thread"] }
+tokio = { version = "1.22", features = ["macros", "time", "rt-multi-thread"] }
 tonic = "0.8"
 tonic-health = "0.7"
 
 [dev-dependencies]
 mockall = "0.11"
 rand = "0.8"
-serial_test = "0.6"
+serial_test = "0.9"
 rollup-http-client = { path = "third-party/machine-emulator-tools/linux/rollup/http/rollup-http-client" }
 
 [build-dependencies]
