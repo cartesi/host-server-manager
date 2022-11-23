@@ -4,7 +4,7 @@ on: [push]
 jobs:
   build:
     name: Cargo build and test
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     env:
       RUSTFLAGS: -D warnings
     steps:
@@ -27,7 +27,7 @@ jobs:
 
   docker:
     name: Build and push docker image
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v2
         with:

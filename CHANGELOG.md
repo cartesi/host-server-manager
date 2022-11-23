@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bumped grpc-interfaces to 0.9.0
 - Use distribution protoc instead of downloading from source
 - Bumped Rust and Rust crates
+- Bumped workflow Ubuntu to 22.04
 
 ## [0.6.0] - 2022-09-08
 ### Added
