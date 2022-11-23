@@ -17,13 +17,11 @@ WORKDIR /usr/src/
 RUN cargo new --bin host-server-manager
 WORKDIR /usr/src/host-server-manager
 
+# Install protoc
+RUN apt update && apt install -y protobuf-compiler libprotobuf-dev
+
 # Install rustfmt (required by tonic when building grpc interfaces)
 RUN rustup component add rustfmt
-
-# Install protoc version 3.20
-RUN export ARCH=$(uname -m | sed 's/aarch64/aarch_64/') && \
-    curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v3.20.1/protoc-3.20.1-linux-$ARCH.zip && \
-    unzip protoc-3.20.1-linux-$ARCH.zip -d /usr/local
 
 # Build dependencies
 COPY ./Cargo.lock ./Cargo.lock

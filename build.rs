@@ -11,5 +11,10 @@
 // specific language governing permissions and limitations under the License.
 
 fn main() -> std::io::Result<()> {
-    tonic_build::compile_protos("third-party/grpc-interfaces/server-manager.proto")
+    tonic_build::configure()
+        .protoc_arg("--experimental_allow_proto3_optional")
+        .compile(
+            &["third-party/grpc-interfaces/server-manager.proto"],
+            &["third-party/grpc-interfaces"],
+        )
 }
