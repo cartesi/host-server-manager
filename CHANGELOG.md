@@ -6,6 +6,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Bumped grpc-interfaces to 0.10.0
+
 ## [0.7.0] - 2022-11-28
 ### Changed
 - Bumped grpc-interfaces to 0.9.0
