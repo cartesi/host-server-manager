@@ -14,6 +14,7 @@ mod common;
 
 mod grpc_tests {
     mod advance_state;
+    mod delete_epoch;
     mod end_session;
     mod finish_epoch;
     mod get_epoch_status;

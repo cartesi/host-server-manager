@@ -54,7 +54,7 @@ async fn test_it_gets_session_with_multiple_epochs() {
             .finish_epoch(grpc_client::FinishEpochRequest {
                 session_id: "rollup session".into(),
                 active_epoch_index: i,
-                processed_input_count: 0,
+                processed_input_count_within_epoch: 0,
                 storage_directory: "".into(),
             })
             .await

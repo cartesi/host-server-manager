@@ -46,10 +46,51 @@ async fn test_it_inspects_and_receive_a_report() {
     let expected = grpc_client::InspectStateResponse {
         session_id: String::from("rollup session"),
         active_epoch_index: 0,
-        current_input_index: 0,
+        processed_input_count: 0,
         status: grpc_client::CompletionStatus::Accepted as i32,
         exception_data: None,
         reports: vec![grpc_client::Report { payload }],
+    };
+    assert_eq!(response, expected);
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn test_it_reports_session_state_correctly() {
+    let _manager = manager::Wrapper::new().await;
+    let mut grpc_client = grpc_client::connect().await;
+
+    setup_advance_state(&mut grpc_client, "rollup session").await;
+    finish_advance_state(&mut grpc_client, "rollup session").await;
+    grpc_client
+        .finish_epoch(grpc_client::FinishEpochRequest {
+            session_id: "rollup session".into(),
+            active_epoch_index: 0,
+            processed_input_count_within_epoch: 1,
+            storage_directory: "".into(),
+        })
+        .await
+        .expect("should finish epoch");
+    let inspect_handle = tokio::spawn(async move {
+        grpc_client
+            .inspect_state(grpc_client::InspectStateRequest {
+                session_id: "rollup session".into(),
+                query_payload: create_payload(),
+            })
+            .await
+            .unwrap()
+            .into_inner()
+    });
+    http_client::finish("accept".into()).await.unwrap_err();
+
+    let response = inspect_handle.await.unwrap();
+    let expected = grpc_client::InspectStateResponse {
+        session_id: String::from("rollup session"),
+        active_epoch_index: 1,
+        processed_input_count: 1,
+        status: grpc_client::CompletionStatus::Accepted as i32,
+        exception_data: None,
+        reports: vec![],
     };
     assert_eq!(response, expected);
 }

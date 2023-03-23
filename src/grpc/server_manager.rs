@@ -10,32 +10,33 @@
 // CONDITIONS OF ANY KIND, either express or implied. See the License for the
 // specific language governing permissions and limitations under the License.
 
-use std::{collections::HashMap, sync::Arc};
-use tokio::sync::Mutex;
-use tonic::{Request, Response, Status};
-
-use crate::controller::Controller;
-use crate::hash::Hash;
-use crate::merkle_tree::{complete::Tree, proof::Proof, Error as MerkleTreeError};
-use crate::model::{
-    AdvanceMetadata, AdvanceResult, AdvanceStateRequest, CompletionStatus, InspectStateRequest,
-    InspectStatus, Notice, Report, Voucher,
-};
-use crate::proofs::compute_proofs;
-
 use super::proto::cartesi_machine::{
     Hash as GrpcHash, MerkleTreeProof as GrpcMerkleTreeProof, Void,
 };
 use super::proto::server_manager::{
     processed_input::ProcessedInputOneOf, server_manager_server::ServerManager, AcceptedData,
     Address, AdvanceStateRequest as GrpcAdvanceStateRequest,
-    CompletionStatus as GrpcCompletionStatus, EndSessionRequest, EpochState, FinishEpochRequest,
-    GetEpochStatusRequest, GetEpochStatusResponse, GetSessionStatusRequest,
-    GetSessionStatusResponse, GetStatusResponse, InspectStateRequest as GrpcInspectStateRequest,
-    InspectStateResponse, Notice as GrpcNotice, ProcessedInput, Report as GrpcReport,
+    CompletionStatus as GrpcCompletionStatus, DeleteEpochRequest as GrpcDeleteEpochRequest,
+    EndSessionRequest, EpochState, FinishEpochRequest, FinishEpochResponse, GetEpochStatusRequest,
+    GetEpochStatusResponse, GetSessionStatusRequest, GetSessionStatusResponse, GetStatusResponse,
+    InspectStateRequest as GrpcInspectStateRequest, InspectStateResponse, Notice as GrpcNotice,
+    OutputEnum, OutputValidityProof, ProcessedInput, Proof as GrpcProof, Report as GrpcReport,
     StartSessionRequest, StartSessionResponse, TaintStatus, Voucher as GrpcVoucher,
 };
 use super::proto::versioning::{GetVersionResponse, SemanticVersion};
+use crate::controller::Controller;
+use crate::hash::{Hash, HASH_SIZE};
+use crate::merkle_tree::{complete::Tree, proof::Proof, Error as MerkleTreeError};
+use crate::model::{
+    AdvanceMetadata, AdvanceResult, AdvanceStateRequest, CompletionStatus, InspectStateRequest,
+    InspectStatus, Notice, Report, Voucher,
+};
+use crate::proofs::compute_proofs;
+use ethabi::ethereum_types::U256;
+use ethabi::Token;
+use std::{collections::HashMap, sync::Arc};
+use tokio::sync::Mutex;
+use tonic::{Request, Response, Status};
 
 pub struct ServerManagerService {
     controller: Controller,
@@ -77,6 +78,7 @@ impl ServerManager for ServerManagerService {
             .try_set_session(
                 request.session_id,
                 request.active_epoch_index,
+                request.processed_input_count,
                 self.controller.clone(),
             )
             .await?;
@@ -109,8 +111,10 @@ impl ServerManager for ServerManagerService {
             .data
             .try_into()
             .or(Err(Status::invalid_argument("invalid address")))?;
-        if metadata.epoch_index != request.active_epoch_index {
-            return Err(Status::invalid_argument("metadata epoch index mismatch"));
+        if metadata.epoch_index != 0 {
+            return Err(Status::invalid_argument(
+                "metadata epoch index is deprecated and should always be 0",
+            ));
         }
         if metadata.input_index != request.current_input_index {
             return Err(Status::invalid_argument("metadata input index mismatch"));
@@ -142,20 +146,24 @@ impl ServerManager for ServerManagerService {
     async fn finish_epoch(
         &self,
         request: Request<FinishEpochRequest>,
-    ) -> Result<Response<Void>, Status> {
+    ) -> Result<Response<FinishEpochResponse>, Status> {
         let request = request.into_inner();
         log::info!("received finish_epoch with id={}", request.session_id);
         if request.storage_directory != "" {
             log::warn!("ignoring storage_directory parameter");
         }
-        self.sessions
+        let response = self
+            .sessions
             .try_get_session(&request.session_id)
             .await?
             .try_lock()
             .or(Err(Status::aborted("concurrent call in session")))?
-            .try_finish_epoch(request.active_epoch_index, request.processed_input_count)
+            .try_finish_epoch(
+                request.active_epoch_index,
+                request.processed_input_count_within_epoch,
+            )
             .await?;
-        Ok(Response::new(Void {}))
+        Ok(Response::new(response))
     }
 
     async fn inspect_state(
@@ -217,6 +225,21 @@ impl ServerManager for ServerManagerService {
             .await?;
         Ok(Response::new(response))
     }
+
+    async fn delete_epoch(
+        &self,
+        request: Request<GrpcDeleteEpochRequest>,
+    ) -> Result<Response<Void>, Status> {
+        let request = request.into_inner();
+        self.sessions
+            .try_get_session(&request.session_id)
+            .await?
+            .try_lock()
+            .or(Err(Status::aborted("concurrent call in session")))?
+            .try_delete_epoch(request.epoch_index)
+            .await?;
+        Ok(Response::new(Void {}))
+    }
 }
 
 struct SessionManager {
@@ -234,6 +257,7 @@ impl SessionManager {
         &self,
         session_id: String,
         active_epoch_index: u64,
+        processed_input_count: u64,
         controller: Controller,
     ) -> Result<(), Status> {
         if session_id == "" {
@@ -249,6 +273,7 @@ impl SessionManager {
                 *entry = Some(SessionEntry::new(
                     session_id,
                     active_epoch_index,
+                    processed_input_count,
                     controller,
                 ));
                 Ok(())
@@ -292,10 +317,19 @@ struct SessionEntry {
 }
 
 impl SessionEntry {
-    fn new(id: String, active_epoch_index: u64, controller: Controller) -> Self {
+    fn new(
+        id: String,
+        active_epoch_index: u64,
+        processed_input_count: u64,
+        controller: Controller,
+    ) -> Self {
         Self {
             id,
-            session: Arc::new(Mutex::new(Session::new(active_epoch_index, controller))),
+            session: Arc::new(Mutex::new(Session::new(
+                active_epoch_index,
+                processed_input_count,
+                controller,
+            ))),
         }
     }
 
@@ -320,8 +354,8 @@ struct Session {
 }
 
 impl Session {
-    fn new(active_epoch_index: u64, controller: Controller) -> Self {
-        let epoch = Arc::new(Mutex::new(Epoch::new()));
+    fn new(active_epoch_index: u64, processed_input_count: u64, controller: Controller) -> Self {
+        let epoch = Arc::new(Mutex::new(Epoch::new(processed_input_count)));
         let mut epochs = HashMap::new();
         epochs.insert(active_epoch_index, epoch);
         Self {
@@ -382,11 +416,11 @@ impl Session {
         })?;
         let active_epoch_index = self.active_epoch_index;
         let epoch = self.try_get_epoch(active_epoch_index)?;
-        let current_input_index = epoch.lock().await.get_current_input_index();
+        let processed_input_count = epoch.lock().await.get_num_processed_inputs_since_genesis();
         Ok(InspectStateResponse {
             session_id,
             active_epoch_index,
-            current_input_index,
+            processed_input_count,
             status: (&result.status).into(),
             exception_data: match result.status {
                 InspectStatus::Exception { exception } => Some(exception.payload),
@@ -399,18 +433,33 @@ impl Session {
     async fn try_finish_epoch(
         &mut self,
         active_epoch_index: u64,
-        processed_input_count: u64,
-    ) -> Result<(), Status> {
+        processed_input_count_within_epoch: u64,
+    ) -> Result<FinishEpochResponse, Status> {
         self.check_epoch_index_overflow()?;
         self.check_tainted().await?;
         self.check_active_epoch(active_epoch_index)?;
-        self.try_get_epoch(active_epoch_index)?
+        let (response, processed_input_count_since_genesis) = {
+            let mut last_epoch = self.try_get_epoch(active_epoch_index)?.lock().await;
+            (
+                last_epoch.try_finish(processed_input_count_within_epoch, active_epoch_index)?,
+                last_epoch.processed_input_count_since_genesis,
+            )
+        };
+        self.active_epoch_index += 1;
+        let epoch = Arc::new(Mutex::new(Epoch::new(
+            processed_input_count_since_genesis + processed_input_count_within_epoch,
+        )));
+        self.epochs.insert(self.active_epoch_index, epoch);
+        Ok(response)
+    }
+
+    async fn try_delete_epoch(&mut self, epoch_index: u64) -> Result<(), Status> {
+        self.check_tainted().await?;
+        self.try_get_epoch(epoch_index)?
             .lock()
             .await
-            .try_finish(processed_input_count)?;
-        self.active_epoch_index += 1;
-        let epoch = Arc::new(Mutex::new(Epoch::new()));
-        self.epochs.insert(self.active_epoch_index, epoch);
+            .check_finished()?;
+        self.epochs.remove(&epoch_index);
         Ok(())
     }
 
@@ -510,10 +559,11 @@ struct Epoch {
     processed_inputs: Vec<AdvanceResult>,
     vouchers_tree: Tree,
     notices_tree: Tree,
+    processed_input_count_since_genesis: u64,
 }
 
 impl Epoch {
-    fn new() -> Self {
+    fn new(processed_input_count_since_genesis: u64) -> Self {
         Self {
             state: EpochState::Active,
             pending_inputs: 0,
@@ -522,6 +572,7 @@ impl Epoch {
                 .expect("cannot fail"),
             notices_tree: Tree::new(LOG2_ROOT_SIZE, LOG2_KECCAK_SIZE, LOG2_KECCAK_SIZE)
                 .expect("cannot fail"),
+            processed_input_count_since_genesis,
         }
     }
 
@@ -558,20 +609,127 @@ impl Epoch {
         Ok(())
     }
 
-    fn try_finish(&mut self, processed_input_count: u64) -> Result<(), Status> {
+    fn try_finish(
+        &mut self,
+        processed_input_count_within_epoch: u64,
+        epoch_index: u64,
+    ) -> Result<FinishEpochResponse, Status> {
         self.check_active()?;
         self.check_pending_inputs()?;
-        self.check_processed_inputs(processed_input_count)?;
+        self.check_processed_inputs(processed_input_count_within_epoch)?;
         self.state = EpochState::Finished;
-        // Re-generate all proofs for processed inputs
-        for (i, result) in self.processed_inputs.iter_mut().enumerate() {
-            let address = i << LOG2_KECCAK_SIZE;
-            result.voucher_hashes_in_epoch =
-                Some(self.vouchers_tree.get_proof(address, LOG2_KECCAK_SIZE)?);
-            result.notice_hashes_in_epoch =
-                Some(self.notices_tree.get_proof(address, LOG2_KECCAK_SIZE)?);
+
+        let machine_state_hash = GrpcHash {
+            data: vec![0 as u8; HASH_SIZE],
+        };
+        let mut proofs: Vec<GrpcProof> = vec![];
+        let index = Token::Int(U256::from(epoch_index));
+        let context = ethabi::encode(&[index]);
+
+        for (local_input_index, result) in self.processed_inputs.iter_mut().enumerate() {
+            let address = local_input_index << LOG2_KECCAK_SIZE;
+            let voucher_hashes_in_epoch =
+                self.vouchers_tree.get_proof(address, LOG2_KECCAK_SIZE)?;
+            let notice_hashes_in_epoch = self.notices_tree.get_proof(address, LOG2_KECCAK_SIZE)?;
+            let global_input_index =
+                self.processed_input_count_since_genesis + local_input_index as u64;
+
+            if let CompletionStatus::Accepted { vouchers, notices } = &mut result.status {
+                // Create GrpcProof for each voucher
+                for (output_index, voucher) in vouchers.iter().enumerate() {
+                    proofs.push(GrpcProof {
+                        input_index: global_input_index,
+                        output_index: output_index as u64,
+                        output_enum: OutputEnum::Voucher.into(),
+                        // Create OutputValidityProof for each voucher
+                        validity: Some(OutputValidityProof {
+                            input_index: local_input_index as u64,
+                            output_index: output_index as u64,
+                            output_hashes_root_hash: Some(GrpcHash::from(
+                                result
+                                    .voucher_root
+                                    .clone()
+                                    .expect("expected voucher's root hash to exist"),
+                            )),
+                            vouchers_epoch_root_hash: Some(GrpcHash::from(
+                                self.vouchers_tree.get_root_hash().clone(),
+                            )),
+                            notices_epoch_root_hash: Some(GrpcHash::from(
+                                self.notices_tree.get_root_hash().clone(),
+                            )),
+                            machine_state_hash: Some(machine_state_hash.clone()),
+                            keccak_in_hashes_siblings: voucher
+                                .keccak_in_voucher_hashes
+                                .clone()
+                                .expect("expected voucher proof to exist")
+                                .sibling_hashes
+                                .into_iter()
+                                .map(GrpcHash::from)
+                                .collect(),
+                            output_hashes_in_epoch_siblings: voucher_hashes_in_epoch
+                                .clone()
+                                .sibling_hashes
+                                .into_iter()
+                                .map(GrpcHash::from)
+                                .collect(),
+                        }),
+                        context: context.clone(),
+                    })
+                }
+                // Create GrpcProof for each notice
+                for (output_index, notice) in notices.iter().enumerate() {
+                    proofs.push(GrpcProof {
+                        input_index: global_input_index,
+                        output_index: output_index as u64,
+                        output_enum: OutputEnum::Notice.into(),
+                        // Create OutputValidityProof for each notice
+                        validity: Some(OutputValidityProof {
+                            input_index: local_input_index as u64,
+                            output_index: output_index as u64,
+                            output_hashes_root_hash: Some(GrpcHash::from(
+                                result
+                                    .notice_root
+                                    .clone()
+                                    .expect("expected notice's root hash to exist"),
+                            )),
+                            vouchers_epoch_root_hash: Some(GrpcHash::from(
+                                self.vouchers_tree.get_root_hash().clone(),
+                            )),
+                            notices_epoch_root_hash: Some(GrpcHash::from(
+                                self.notices_tree.get_root_hash().clone(),
+                            )),
+                            machine_state_hash: Some(machine_state_hash.clone()),
+                            keccak_in_hashes_siblings: notice
+                                .keccak_in_notice_hashes
+                                .clone()
+                                .expect("expected notice proof to exist")
+                                .sibling_hashes
+                                .into_iter()
+                                .map(GrpcHash::from)
+                                .collect(),
+                            output_hashes_in_epoch_siblings: notice_hashes_in_epoch
+                                .clone()
+                                .sibling_hashes
+                                .into_iter()
+                                .map(GrpcHash::from)
+                                .collect(),
+                        }),
+                        context: context.clone(),
+                    })
+                }
+            }
         }
-        Ok(())
+
+        Ok(FinishEpochResponse {
+            machine_hash: Some(machine_state_hash.clone()),
+            vouchers_epoch_root_hash: Some(GrpcHash::from(
+                self.vouchers_tree.get_root_hash().clone(),
+            )),
+            notices_epoch_root_hash: Some(GrpcHash::from(
+                self.notices_tree.get_root_hash().clone(),
+            )),
+            proofs,
+        })
     }
 
     fn get_status(
@@ -584,31 +742,34 @@ impl Epoch {
             session_id,
             epoch_index,
             state: self.state as i32,
-            most_recent_machine_hash: None,
-            most_recent_vouchers_epoch_root_hash: Some(
-                self.vouchers_tree.get_root_hash().clone().into(),
-            ),
-            most_recent_notices_epoch_root_hash: Some(
-                self.notices_tree.get_root_hash().clone().into(),
-            ),
             processed_inputs: self
                 .processed_inputs
                 .iter()
                 .cloned()
                 .enumerate()
-                .map(|item| item.into())
+                .map(|(local_input_index, input)| {
+                    (
+                        local_input_index + self.processed_input_count_since_genesis as usize,
+                        input,
+                    )
+                        .into()
+                })
                 .collect(),
             pending_input_count: self.pending_inputs,
             taint_status,
         }
     }
 
-    fn get_num_processed_inputs(&self) -> u64 {
+    fn get_num_processed_inputs_within_epoch(&self) -> u64 {
         self.processed_inputs.len() as u64
     }
 
+    fn get_num_processed_inputs_since_genesis(&self) -> u64 {
+        self.get_num_processed_inputs_within_epoch() + self.processed_input_count_since_genesis
+    }
+
     fn get_current_input_index(&self) -> u64 {
-        self.pending_inputs + self.get_num_processed_inputs()
+        self.pending_inputs + self.get_num_processed_inputs_since_genesis()
     }
 
     fn check_endable(&self) -> Result<(), Status> {
@@ -622,6 +783,13 @@ impl Epoch {
             Err(Status::invalid_argument("epoch is finished"))
         } else {
             Ok(())
+        }
+    }
+
+    fn check_finished(&self) -> Result<(), Status> {
+        match self.check_active() {
+            Ok(_) => Err(Status::invalid_argument("epoch is not finished")),
+            Err(_) => Ok(()),
         }
     }
 
@@ -645,12 +813,16 @@ impl Epoch {
         }
     }
 
-    fn check_processed_inputs(&self, processed_input_count: u64) -> Result<(), Status> {
-        if self.get_num_processed_inputs() != processed_input_count {
+    fn check_processed_inputs(
+        &self,
+        processed_input_count_within_epoch: u64,
+    ) -> Result<(), Status> {
+        if self.get_num_processed_inputs_within_epoch() as u64 != processed_input_count_within_epoch
+        {
             Err(Status::invalid_argument(format!(
                 "incorrect processed input count (expected {}, got {})",
-                self.get_num_processed_inputs(),
-                processed_input_count
+                self.get_num_processed_inputs_within_epoch(),
+                processed_input_count_within_epoch
             )))
         } else {
             Ok(())
@@ -658,7 +830,7 @@ impl Epoch {
     }
 
     fn check_no_processed_inputs(&self) -> Result<(), Status> {
-        if self.get_num_processed_inputs() != 0 {
+        if self.get_num_processed_inputs_within_epoch() != 0 {
             Err(Status::invalid_argument("epoch still has processed inputs"))
         } else {
             Ok(())
@@ -666,7 +838,9 @@ impl Epoch {
     }
 
     fn check_input_limit(&self) -> Result<(), Status> {
-        if self.pending_inputs + self.get_num_processed_inputs() + 1 >= MAX_INPUTS_IN_EPOCH as u64 {
+        if self.pending_inputs + self.get_num_processed_inputs_within_epoch() + 1
+            >= MAX_INPUTS_IN_EPOCH as u64
+        {
             Err(Status::invalid_argument(
                 "reached max number of inputs per epoch",
             ))
@@ -680,11 +854,6 @@ impl From<(usize, AdvanceResult)> for ProcessedInput {
     fn from((index, result): (usize, AdvanceResult)) -> ProcessedInput {
         ProcessedInput {
             input_index: index as u64,
-            most_recent_machine_hash: None,
-            voucher_hashes_in_epoch: result
-                .voucher_hashes_in_epoch
-                .map(GrpcMerkleTreeProof::from),
-            notice_hashes_in_epoch: result.notice_hashes_in_epoch.map(GrpcMerkleTreeProof::from),
             status: (&result.status).into(),
             processed_input_one_of: result.status.into(),
             reports: result.reports.into_iter().map(GrpcReport::from).collect(),
@@ -719,9 +888,7 @@ impl From<CompletionStatus> for Option<ProcessedInputOneOf> {
         match status {
             CompletionStatus::Accepted { vouchers, notices } => {
                 Some(ProcessedInputOneOf::AcceptedData(AcceptedData {
-                    voucher_hashes_in_machine: None,
                     vouchers: vouchers.into_iter().map(GrpcVoucher::from).collect(),
-                    notice_hashes_in_machine: None,
                     notices: notices.into_iter().map(GrpcNotice::from).collect(),
                 }))
             }
@@ -736,14 +903,10 @@ impl From<CompletionStatus> for Option<ProcessedInputOneOf> {
 impl From<Voucher> for GrpcVoucher {
     fn from(voucher: Voucher) -> GrpcVoucher {
         GrpcVoucher {
-            keccak: Some(voucher.keccak.into()),
-            address: Some(Address {
+            destination: Some(Address {
                 data: voucher.address.into(),
             }),
             payload: voucher.payload,
-            keccak_in_voucher_hashes: voucher
-                .keccak_in_voucher_hashes
-                .map(GrpcMerkleTreeProof::from),
         }
     }
 }
@@ -751,11 +914,7 @@ impl From<Voucher> for GrpcVoucher {
 impl From<Notice> for GrpcNotice {
     fn from(notice: Notice) -> GrpcNotice {
         GrpcNotice {
-            keccak: Some(notice.keccak.into()),
             payload: notice.payload,
-            keccak_in_notice_hashes: notice
-                .keccak_in_notice_hashes
-                .map(GrpcMerkleTreeProof::from),
         }
     }
 }

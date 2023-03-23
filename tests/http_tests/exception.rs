@@ -63,7 +63,7 @@ async fn test_it_notifies_exception_during_inspect_state() {
     let expected = grpc_client::InspectStateResponse {
         session_id: String::from("rollup session"),
         active_epoch_index: 0,
-        current_input_index: 0,
+        processed_input_count: 0,
         status: grpc_client::CompletionStatus::Exception as i32,
         exception_data: Some(payload),
         reports: vec![],

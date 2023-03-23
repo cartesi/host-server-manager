@@ -40,6 +40,7 @@ pub fn create_start_session_request(session_id: &str) -> StartSessionRequest {
         session_id: session_id.into(),
         machine_directory: "".into(),
         active_epoch_index: 0,
+        processed_input_count: 0,
         server_cycles: None,
         server_deadline: None,
         runtime: None,
@@ -61,7 +62,7 @@ pub fn create_advance_state_request(
             }),
             block_number: 0,
             timestamp: create_timestamp(),
-            epoch_index,
+            epoch_index: 0, //this field is deprecated and should always be 0
             input_index,
         }),
         input_payload: super::create_payload(),
