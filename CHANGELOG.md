@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2023-05-05
+### Changed
+- Bumped grpc-interfaces to 0.12.0
+- Updated server-manager gRPC interface
+- Bumped external dependencies
+- Bumped machine-emulator-tools to 0.11.0
+- Bumped Rust version to 1.69
+
 ## [0.8.0] - 2023-02-17
 ### Changed
 - Bumped grpc-interfaces to 0.10.0
@@ -61,7 +69,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Previous Versions]
 - [0.1.0]
 
-[Unreleased]: https://github.com/cartesi/host-server-manager/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/cartesi/host-server-manager/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/cartesi/host-server-manager/releases/tag/v0.9.0
 [0.8.0]: https://github.com/cartesi/host-server-manager/releases/tag/v0.8.0
 [0.7.0]: https://github.com/cartesi/host-server-manager/releases/tag/v0.7.0
 [0.6.0]: https://github.com/cartesi/host-server-manager/releases/tag/v0.6.0
