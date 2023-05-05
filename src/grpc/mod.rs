@@ -16,7 +16,7 @@ mod server_manager;
 use futures_util::FutureExt;
 use std::future::Future;
 use tonic::transport::Server;
-use tonic_health::proto::health_server::{Health, HealthServer};
+use tonic_health::pb::health_server::{Health, HealthServer};
 
 use proto::server_manager::server_manager_server::ServerManagerServer;
 use server_manager::ServerManagerService;

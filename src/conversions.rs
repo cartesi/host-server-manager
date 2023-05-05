@@ -28,7 +28,7 @@ pub fn encode_ethereum_binary(bytes: &[u8]) -> String {
 
 /// Convert string in Ethereum binary format to binary array
 pub fn decode_ethereum_binary(s: &str) -> Result<Vec<u8>, DecodeError> {
-    snafu::ensure!(s.starts_with("0x"), InvalidPrefix { s });
+    snafu::ensure!(s.starts_with("0x"), InvalidPrefixSnafu { s });
     hex::decode(&s[2..]).map_err(|e| DecodeError::FromHex {
         s: s.to_string(),
         e,

@@ -12,7 +12,7 @@
 
 //! Pristine merkle tree based on Cartesi machine-emulator implementation
 
-use super::{get_concat_hash, Error, SizeOutOfRange, WordSizeGreaterThanRootSize};
+use super::{get_concat_hash, Error, SizeOutOfRangeSnafu, WordSizeGreaterThanRootSizeSnafu};
 use crate::hash::{Digest, Hash, Hasher};
 
 /// Merkle tree where all leaves are zero
@@ -31,7 +31,7 @@ impl Tree {
     pub fn new(log2_root_size: usize, log2_word_size: usize) -> Result<Self, Error> {
         snafu::ensure!(
             log2_word_size <= log2_root_size,
-            WordSizeGreaterThanRootSize
+            WordSizeGreaterThanRootSizeSnafu
         );
         let num_hashes = log2_root_size - log2_word_size + 1;
         let mut hashes = vec![];
@@ -55,7 +55,7 @@ impl Tree {
     pub fn get_hash(&self, log2_size: usize) -> Result<&Hash, Error> {
         snafu::ensure!(
             log2_size >= self.log2_word_size && log2_size <= self.log2_root_size,
-            SizeOutOfRange
+            SizeOutOfRangeSnafu
         );
         Ok(&self.hashes[log2_size - self.log2_word_size])
     }

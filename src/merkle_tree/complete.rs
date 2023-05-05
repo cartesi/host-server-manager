@@ -13,8 +13,9 @@
 //! Complete merkle tree based on Cartesi machine-emulator implementation
 
 use super::{
-    get_concat_hash, pristine, proof::Proof, Error, LeafSizeGreaterThanRootSize, MisalignedAddress,
-    SizeOutOfRange, TooManyLeaves, TreeIsFull, TreeTooLarge, WordSizeGreaterThanLeafSize,
+    get_concat_hash, pristine, proof::Proof, Error, LeafSizeGreaterThanRootSizeSnafu,
+    MisalignedAddressSnafu, SizeOutOfRangeSnafu, TooManyLeavesSnafu, TreeIsFullSnafu,
+    TreeTooLargeSnafu, WordSizeGreaterThanLeafSizeSnafu,
 };
 use crate::hash::{Digest, Hash, Hasher};
 
@@ -44,15 +45,15 @@ impl Tree {
     ) -> Result<Self, Error> {
         snafu::ensure!(
             log2_leaf_size <= log2_root_size,
-            LeafSizeGreaterThanRootSize
+            LeafSizeGreaterThanRootSizeSnafu
         );
         snafu::ensure!(
             log2_word_size <= log2_leaf_size,
-            WordSizeGreaterThanLeafSize
+            WordSizeGreaterThanLeafSizeSnafu
         );
         snafu::ensure!(
             log2_root_size <= std::mem::size_of::<usize>() * 8,
-            TreeTooLarge
+            TreeTooLargeSnafu
         );
         Ok(Self {
             log2_root_size,
@@ -74,7 +75,7 @@ impl Tree {
         leaves: Level,
     ) -> Result<Self, Error> {
         let max_len = 1 << (log2_root_size - log2_leaf_size);
-        snafu::ensure!(leaves.len() <= max_len, TooManyLeaves);
+        snafu::ensure!(leaves.len() <= max_len, TooManyLeavesSnafu);
         let mut tree = Self::new(log2_root_size, log2_leaf_size, log2_word_size)?;
         let level = tree.get_level_mut(log2_leaf_size).expect("cannot fail");
         *level = leaves;
@@ -96,10 +97,10 @@ impl Tree {
     pub fn get_proof(&self, address: usize, log2_size: usize) -> Result<Proof, Error> {
         snafu::ensure!(
             log2_size >= self.log2_leaf_size && log2_size <= self.log2_root_size,
-            SizeOutOfRange
+            SizeOutOfRangeSnafu
         );
         let aligned_address = (address >> log2_size) << log2_size;
-        snafu::ensure!(address == aligned_address, MisalignedAddress);
+        snafu::ensure!(address == aligned_address, MisalignedAddressSnafu);
         let target_hash = self.get_node_hash(address, log2_size)?.clone();
         let log2_root_size = self.log2_root_size;
         let root_hash = self.get_root_hash().clone();
@@ -120,7 +121,7 @@ impl Tree {
         let leaves = self
             .get_level_mut(self.log2_leaf_size)
             .expect("cannot fail");
-        snafu::ensure!(leaves.len() < max_len, TreeIsFull);
+        snafu::ensure!(leaves.len() < max_len, TreeIsFullSnafu);
         leaves.push(leaf);
         self.bubble_up();
         Ok(())
@@ -139,7 +140,7 @@ impl Tree {
     fn get_node_hash(&self, address: usize, log2_size: usize) -> Result<&Hash, Error> {
         let address = address >> log2_size;
         let bounds = 1 << (self.log2_root_size - log2_size);
-        snafu::ensure!(address < bounds, SizeOutOfRange);
+        snafu::ensure!(address < bounds, SizeOutOfRangeSnafu);
         let level = self.get_level(log2_size)?;
         if address < level.len() {
             Ok(&level[address])
@@ -205,7 +206,7 @@ impl Tree {
     fn get_level_index(&self, log2_size: usize) -> Result<usize, Error> {
         snafu::ensure!(
             log2_size >= self.log2_leaf_size && log2_size <= self.log2_root_size,
-            SizeOutOfRange
+            SizeOutOfRangeSnafu
         );
         Ok(self.log2_root_size - log2_size)
     }

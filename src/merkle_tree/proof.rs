@@ -12,7 +12,7 @@
 
 //! Merkle tree proof based on Cartesi machine-emulator implementation
 
-use super::{Error, SizeOutOfRange, TargetSizeGreaterThanRootSize};
+use super::{Error, SizeOutOfRangeSnafu, TargetSizeGreaterThanRootSizeSnafu};
 
 use crate::hash::Hash;
 
@@ -41,7 +41,7 @@ impl Proof {
     ) -> Result<Self, Error> {
         snafu::ensure!(
             log2_target_size <= log2_root_size,
-            TargetSizeGreaterThanRootSize
+            TargetSizeGreaterThanRootSizeSnafu
         );
         Ok(Self {
             target_address,
@@ -62,9 +62,9 @@ impl Proof {
 
     /// Converts log2_size to index into siblings array
     fn log2_size_to_index(&self, log2_size: usize) -> Result<usize, Error> {
-        snafu::ensure!(log2_size < self.log2_root_size, SizeOutOfRange);
+        snafu::ensure!(log2_size < self.log2_root_size, SizeOutOfRangeSnafu);
         let index = self.log2_root_size - 1 - log2_size;
-        snafu::ensure!(index < self.sibling_hashes.len(), SizeOutOfRange);
+        snafu::ensure!(index < self.sibling_hashes.len(), SizeOutOfRangeSnafu);
         Ok(index)
     }
 }
