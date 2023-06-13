@@ -68,8 +68,8 @@ async fn test_it_finishes_existing_epoch_with_outputs() {
     let _manager = manager::Wrapper::new().await;
     let mut grpc_client = grpc_client::connect().await;
     setup_advance_state(&mut grpc_client, "rollup session").await;
-    let address = String::from("0x") + &"fa".repeat(20);
-    http_client::insert_voucher(address, "0xdeadbeef".into())
+    let destination = String::from("0x") + &"fa".repeat(20);
+    http_client::insert_voucher(destination, "0xdeadbeef".into())
         .await
         .unwrap();
     http_client::insert_notice("0xdeadbeef".into())

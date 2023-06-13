@@ -904,7 +904,7 @@ impl From<Voucher> for GrpcVoucher {
     fn from(voucher: Voucher) -> GrpcVoucher {
         GrpcVoucher {
             destination: Some(Address {
-                data: voucher.address.into(),
+                data: voucher.destination.into(),
             }),
             payload: voucher.payload,
         }

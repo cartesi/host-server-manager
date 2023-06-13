@@ -64,10 +64,13 @@ pub async fn finish(status: String) -> Result<RollupHttpRequest, HttpError> {
     handle_json_response(response).await
 }
 
-pub async fn insert_voucher(address: String, payload: String) -> Result<IndexResponse, HttpError> {
+pub async fn insert_voucher(
+    destination: String,
+    payload: String,
+) -> Result<IndexResponse, HttpError> {
     let url = format!("{}/voucher", config::get_http_rollup_server_address());
     let mut request = HashMap::new();
-    request.insert("address", address);
+    request.insert("destination", destination);
     request.insert("payload", payload);
     let client = reqwest::Client::new();
     let response = client.post(url).json(&request).send().await.unwrap();

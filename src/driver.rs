@@ -15,9 +15,9 @@ use std::mem::size_of;
 
 use crate::hash::{Digest, Hash, Hasher, HASH_SIZE};
 
-pub fn compute_voucher_hash(address: &[u8], payload: &[u8]) -> Hash {
+pub fn compute_voucher_hash(destination: &[u8], payload: &[u8]) -> Hash {
     let mut hasher = Hasher::new();
-    write_data(&mut hasher, address);
+    write_data(&mut hasher, destination);
     write_u64(&mut hasher, 0x40);
     write_payload(&mut hasher, payload);
     hasher.finalize().into()
@@ -61,9 +61,9 @@ mod tests {
 
     #[test]
     fn test_update_voucher_hash() {
-        let address = hex::decode("5555555555555555555555555555555555555555").unwrap();
+        let destination = hex::decode("5555555555555555555555555555555555555555").unwrap();
         let payload: Vec<u8> = "hello world".as_bytes().into();
-        let hash = compute_voucher_hash(&address, &payload);
+        let hash = compute_voucher_hash(&destination, &payload);
         let expected_hash =
             Hash::decode("61a61380d2a3b5e2b09a5ff259a2e1048da1989bdd6d6ecc69594cfbedc01278");
         assert_eq!(&hash, &expected_hash);

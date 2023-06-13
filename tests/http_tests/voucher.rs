@@ -21,9 +21,11 @@ async fn test_it_insert_voucher_during_advance_state() {
     // Send vouchers
     const N: usize = 3;
     for i in 0..N {
-        let address = http_client::create_address();
+        let destination = http_client::create_address();
         let payload = http_client::create_payload();
-        let result = http_client::insert_voucher(address, payload).await.unwrap();
+        let result = http_client::insert_voucher(destination, payload)
+            .await
+            .unwrap();
         assert_eq!(result.index, i);
     }
     // Check if vouchers arrived
@@ -62,9 +64,9 @@ async fn test_it_fails_to_insert_voucher_with_incorrect_data() {
 async fn test_it_fails_to_insert_voucher_during_idle_state() {
     let _manager = manager::Wrapper::new().await;
     // Don't perform setup on purpose
-    let address = http_client::create_address();
+    let destination = http_client::create_address();
     let payload = http_client::create_payload();
-    let response = http_client::insert_voucher(address, payload).await;
+    let response = http_client::insert_voucher(destination, payload).await;
     assert_eq!(
         response,
         Err(http_client::HttpError {

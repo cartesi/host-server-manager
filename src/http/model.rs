@@ -89,7 +89,7 @@ impl From<RollupRequest> for HttpRollupRequest {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HttpVoucher {
-    pub address: String,
+    pub destination: String,
     pub payload: String,
 }
 
@@ -97,7 +97,7 @@ impl TryFrom<HttpVoucher> for Voucher {
     type Error = VoucherDecodeError;
     fn try_from(voucher: HttpVoucher) -> Result<Voucher, VoucherDecodeError> {
         Ok(Voucher::new(
-            conversions::decode_ethereum_binary(&voucher.address)?.try_into()?,
+            conversions::decode_ethereum_binary(&voucher.destination)?.try_into()?,
             conversions::decode_ethereum_binary(&voucher.payload)?,
         ))
     }

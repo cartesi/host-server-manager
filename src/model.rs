@@ -137,17 +137,17 @@ pub enum RollupRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Voucher {
-    pub address: [u8; ADDRESS_SIZE],
+    pub destination: [u8; ADDRESS_SIZE],
     pub payload: Vec<u8>,
     pub keccak: Hash,
     pub keccak_in_voucher_hashes: Option<Proof>,
 }
 
 impl Voucher {
-    pub fn new(address: [u8; ADDRESS_SIZE], payload: Vec<u8>) -> Self {
-        let keccak = compute_voucher_hash(&address, &payload);
+    pub fn new(destination: [u8; ADDRESS_SIZE], payload: Vec<u8>) -> Self {
+        let keccak = compute_voucher_hash(&destination, &payload);
         Self {
-            address,
+            destination,
             payload,
             keccak,
             keccak_in_voucher_hashes: None,
